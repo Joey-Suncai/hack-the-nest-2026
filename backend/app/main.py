@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from app import gemini
+from app import gemini, steps
 
 app = FastAPI(title="Hack The Nest 2026 API")
 
@@ -78,3 +78,17 @@ async def analyze_file(file: UploadFile = File(...), prompt: str = Form("描述�
         return bad_request(f"文件太大（上限 {MAX_FILE_MB}MB）")
     text = gemini.generate_text(prompt, files=[(data, file.content_type)])
     return {"result": text}
+
+
+# ---------- ShowMe ----------
+@app.post("/api/next-step", response_model=steps.NextStepOut)
+def next_step(body: steps.NextStepIn):
+    if not body.goal.strip():
+        return bad_request("goal 不能为空")
+    try:
+        steps.decode_screenshot(body.screenshot)
+    except ValueError as e:
+        return bad_request(str(e))
+    body.history = body.history[-10:]
+    out = steps.mock_next_step(body) if gemini.MOCK else steps.next_step(body)
+    return steps.finalize(out)
