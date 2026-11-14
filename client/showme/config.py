@@ -26,5 +26,11 @@ BUBBLE_FONT_SIZE = 15  # 提示气泡字号
 BUBBLE_BG = "#1C1C1E"  # 提示气泡背景
 BUBBLE_FG = "#FFFFFF"  # 提示气泡文字
 
+# ---- 字幕（屏幕底部居中）----
+CAPTION_FONT_SIZE = 22
+CAPTION_BOTTOM = 72  # 离屏幕底部多远
+CAPTION_MAX_W = 0.6  # 最宽占屏幕宽度的比例
+CAPTION_HOLD_S = 0.8  # 语音读完后字幕再停留多久
+
 # 截图前隐藏高亮层后等多久（C0 实测 0.05 秒够）
 HIDE_WAIT_S = 0.05

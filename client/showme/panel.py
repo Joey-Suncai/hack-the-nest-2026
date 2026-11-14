@@ -3,7 +3,9 @@
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -20,6 +22,9 @@ QLabel { color: #E5E5EA; font-size: 13px; }
 QLabel#title { color: #FFFFFF; font-size: 16px; font-weight: 600; }
 QLabel#step { color: #FFFFFF; font-size: 15px; }
 QLabel#error { color: #FF6B6B; }
+QLabel#steps { font-size: 13px; }
+QFrame#line { background: #3A3A3C; max-height: 1px; }
+QCheckBox { color: #E5E5EA; font-size: 13px; }
 QLineEdit, QComboBox {
   background: #2C2C2E; color: #FFFFFF; border: 1px solid #3A3A3C;
   border-radius: 6px; padding: 6px 8px; font-size: 13px;
@@ -57,6 +62,8 @@ class Panel(QWidget):
         self.lang_box = QComboBox()
         self.lang_box.addItem("中文", "zh")
         self.lang_box.addItem("English", "en")
+        self.voice_box = QCheckBox("语音")
+        self.voice_box.setChecked(True)
 
         self.start_btn = QPushButton("开始")
         self.start_btn.setObjectName("start")
@@ -70,6 +77,14 @@ class Panel(QWidget):
         self.step_label.setWordWrap(True)
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
+        self.line = QFrame()
+        self.line.setObjectName("line")
+        self.line.hide()
+        self.steps_label = QLabel("")
+        self.steps_label.setObjectName("steps")
+        self.steps_label.setWordWrap(True)
+        self.steps_label.setTextFormat(Qt.TextFormat.RichText)
+        self.steps_label.hide()
         self.error_label = QLabel("")
         self.error_label.setObjectName("error")
         self.error_label.setWordWrap(True)
@@ -77,6 +92,7 @@ class Panel(QWidget):
         top = QHBoxLayout()
         top.addWidget(self.title)
         top.addStretch()
+        top.addWidget(self.voice_box)
         top.addWidget(self.lang_box)
         btns = QHBoxLayout()
         btns.addWidget(self.start_btn, 2)
@@ -91,6 +107,8 @@ class Panel(QWidget):
         lay.addWidget(self.goal_edit)
         lay.addLayout(btns)
         lay.addWidget(self.step_label)
+        lay.addWidget(self.line)
+        lay.addWidget(self.steps_label)
         lay.addWidget(self.status_label)
         lay.addWidget(self.error_label)
 
@@ -109,6 +127,27 @@ class Panel(QWidget):
     def lang(self) -> str:
         return self.lang_box.currentData()
 
+    def voice_enabled(self) -> bool:
+        return self.voice_box.isChecked()
+
+    def set_steps(self, done: list[str], current: str | None, upcoming: list[str]) -> None:
+        """步骤列表：做完的打勾、当前这步高亮、后面的（来自 /api/guide 大纲）灰色。"""
+        rows = []
+        n = 0
+        for t in done:
+            n += 1
+            rows.append(f'<span style="color:#30D158">✓</span>&nbsp; <span style="color:#8E8E93">{n}. {_esc(t)}</span>')
+        if current:
+            n += 1
+            rows.append(f'<span style="color:#FF2D78">●</span>&nbsp; <b style="color:#FFFFFF">{n}. {_esc(current)}</b>')
+        for t in upcoming:
+            n += 1
+            rows.append(f'<span style="color:#636366">○</span>&nbsp; <span style="color:#636366">{n}. {_esc(t)}</span>')
+        self.steps_label.setText("<br>".join(rows))
+        self.steps_label.setVisible(bool(rows))
+        self.line.setVisible(bool(rows))
+        self._fit()
+
     def set_mock(self, mock: bool) -> None:
         self.title.setText("ShowMe · MOCK" if mock else "ShowMe")
 
@@ -126,7 +165,8 @@ class Panel(QWidget):
         self._fit()
 
     def set_step(self, n: int, instruction: str) -> None:
-        self.step_label.setText(f"第 {n} 步：{instruction}")
+        # 当前这一步已经在步骤列表里高亮了，这里不重复显示；step_label 只用来显示「完成！」
+        self.step_label.setText("")
         self.error_label.setText("")
         self.retry_btn.setEnabled(False)
         self._fit()
@@ -146,6 +186,7 @@ class Panel(QWidget):
             self.set_error("先写下你想做什么")
             return
         self.step_label.setText("")
+        self.set_steps([], None, [])
         self.start_requested.emit(app or "当前软件", goal)
 
     def _fit(self):
@@ -154,3 +195,7 @@ class Panel(QWidget):
     def closeEvent(self, e):
         QApplication.quit()
         super().closeEvent(e)
+
+
+def _esc(s: str) -> str:
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

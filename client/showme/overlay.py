@@ -62,6 +62,12 @@ class Overlay(QWidget):
         self._font.setPixelSize(C.BUBBLE_FONT_SIZE)
         self._font.setWeight(QFont.Weight.DemiBold)
 
+        self._caption = ""
+        self._caption_rect: QRect | None = None
+        self._caption_font = QFont()
+        self._caption_font.setPixelSize(C.CAPTION_FONT_SIZE)
+        self._caption_font.setWeight(QFont.Weight.Medium)
+
         self._clock = QElapsedTimer()
         self._clock.start()
         self._anim = QTimer(self)
@@ -85,14 +91,29 @@ class Overlay(QWidget):
         self._anim.stop()
         self.update()
 
+    def show_caption(self, text: str) -> None:
+        """屏幕底部居中的字幕。"""
+        old = self._caption_rect
+        self._caption = text
+        self._caption_rect = self._layout_caption()
+        self.update(self._caption_rect.united(old) if old else self._caption_rect)
+
+    def clear_caption(self) -> None:
+        old = self._caption_rect
+        self._caption, self._caption_rect = "", None
+        if old:
+            self.update(old)
+
     def painted_rects(self) -> list[tuple[int, int, int, int]]:
-        """框（含光晕）和气泡占用的区域，给画面变化检测做遮罩。"""
-        if self._rect is None:
-            return []
-        g = C.GLOW_SIZE + C.BORDER_WIDTH
-        out = [self._rect.adjusted(-g, -g, g, g)]
+        """框（含光晕）、气泡和字幕占用的区域，给画面变化检测做遮罩。"""
+        out = []
+        if self._rect is not None:
+            g = C.GLOW_SIZE + C.BORDER_WIDTH
+            out.append(self._rect.adjusted(-g, -g, g, g))
         if self._bubble is not None:
             out.append(self._bubble.adjusted(-4, -4, 4, 4))
+        # 字幕区域一直遮住：字幕出现 / 消失本身不能被当成「画面变了」
+        out.append(self.caption_band())
         return [(r.x(), r.y(), r.width(), r.height()) for r in out]
 
     @contextmanager
@@ -135,11 +156,43 @@ class Overlay(QWidget):
             y = self._rect.top() - C.GLOW_SIZE // 2 - BUBBLE_GAP - h
         return QRect(x, max(8, y), w, h)
 
+    def caption_band(self) -> QRect:
+        """字幕可能出现的整条底部区域（最多约 3 行字）。"""
+        screen = self.rect()
+        top = screen.bottom() - C.CAPTION_BOTTOM - (C.CAPTION_FONT_SIZE * 3 + 60)
+        return QRect(0, top, screen.width(), screen.height() - top)
+
+    def _layout_caption(self) -> QRect:
+        fm = QFontMetrics(self._caption_font)
+        screen = self.rect()
+        max_w = int(screen.width() * C.CAPTION_MAX_W)
+        px, py = 24, 14
+        tr = fm.boundingRect(QRect(0, 0, max_w - 2 * px, 1000),
+                             Qt.TextFlag.TextWordWrap | Qt.AlignmentFlag.AlignHCenter, self._caption)
+        w, h = tr.width() + 2 * px, tr.height() + 2 * py
+        return QRect(screen.center().x() - w // 2, screen.bottom() - C.CAPTION_BOTTOM - h, w, h)
+
+    def _paint_caption(self, p: QPainter):
+        r = self._caption_rect
+        p.setPen(Qt.PenStyle.NoPen)
+        bg = QColor(0, 0, 0)
+        bg.setAlphaF(0.72)
+        p.setBrush(bg)
+        p.drawRoundedRect(QRectF(r), 14, 14)
+        p.setPen(QColor("#FFFFFF"))
+        p.setFont(self._caption_font)
+        p.drawText(r.adjusted(24, 14, -24, -14),
+                   Qt.TextFlag.TextWordWrap | Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+                   self._caption)
+
     def paintEvent(self, _):
-        if self._rect is None:
-            return
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if self._caption_rect is not None:
+            self._paint_caption(p)
+        if self._rect is None:
+            p.end()
+            return
         color = QColor(C.HIGHLIGHT_COLOR)
         k = self._breath()
         r = QRectF(self._rect)

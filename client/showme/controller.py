@@ -14,10 +14,11 @@ import traceback
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
-from showme import api, capture
+from showme import api, capture, wording
 from showme.change import ChangeDetector, mask_rects
 from showme.config import HIGHLIGHT_PAD, POLL_S
 from showme.coords import box_to_rect, expand
+from showme.narrator import Narrator
 
 IDLE, REQUESTING, WAITING, PAUSED = "IDLE", "REQUESTING", "WAITING", "PAUSED"
 
@@ -54,6 +55,8 @@ class Controller(QObject):
         self.poll = QTimer(self)
         self.poll.setInterval(int(POLL_S * 1000))
         self.poll.timeout.connect(self._on_poll)
+        self.lang = "zh"
+        self.narrator = Narrator(overlay, self._bg, panel.voice_enabled, lambda: self.lang)
 
         panel.start_requested.connect(self.start)
         panel.stop_requested.connect(self.stop)
@@ -68,12 +71,15 @@ class Controller(QObject):
         self.guide = None
         self.last_instruction = None
         self.panel.set_running(True)
+        self.narrator.say(wording.intro(app, goal, self.lang))
+        self._fetch_guide()
         self._request()
 
     def stop(self):
         self._token += 1
         self.poll.stop()
         self.overlay.clear()
+        self.narrator.stop()
         if self.state != IDLE:
             self.panel.set_status("已停止")
         self.state = IDLE
@@ -134,21 +140,24 @@ class Controller(QObject):
             self.expect = r.get("expect")
             self.panel.set_step(len(self.history) + 1, text)
             self.panel.set_status("做完这一步，框会自动跳到下一步")
-            self._speak(text)
+            self._update_steps()
+            # 第 1 步排在开场白后面；之后每一步打断上一句没读完的
+            self.narrator.say(text, interrupt=bool(self.history))
             self._wait()
         elif status == "done":
             self.overlay.clear()
             self.state = IDLE
-            self.panel.set_step(len(self.history) + 1, text or "完成！")
-            self.panel.set_status("完成！")
+            self.panel.step_label.setText("完成！")
+            self.panel.set_status("")
+            self.panel.set_steps([h["instruction"] for h in self.history], None, [])
             self.panel.set_running(False)
-            self._speak(text or "完成！")
+            self.narrator.say(wording.outro(self.app, self.goal, len(self.history), self.lang, text), interrupt=True)
         else:  # unsure
             self.overlay.clear()
             self.last_instruction = None
             self.panel.set_status(text or "看不出下一步该点哪里")
             self.panel.allow_retry(True)
-            self._speak(text)
+            self.narrator.say(text, interrupt=True)
             self._wait()
 
     def _on_error(self, msg: str):
@@ -185,8 +194,19 @@ class Controller(QObject):
                 self.history.append({"instruction": self.last_instruction, "ok": True})
             self._request()
 
-    def _speak(self, text: str):
-        """C7 再接播放；现在先调接口，204 / 没有这个接口都静默跳过。"""
-        if not text:
-            return
-        self._bg(lambda: api.speak(text, self.lang), lambda _mp3: None, lambda _msg: None)
+    def _fetch_guide(self):
+        """加分项：后端用官方文档生成步骤大纲。没有这个接口 / 失败都没关系。"""
+        app, goal, lang = self.app, self.goal, self.lang
+
+        def got(g):
+            if g and g.get("outline"):
+                self.guide = g["outline"]
+                self._update_steps()
+
+        self._bg(lambda: api.guide(app, goal, lang), got, lambda _m: None)
+
+    def _update_steps(self):
+        done = [h["instruction"] for h in self.history]
+        n = len(done) + (1 if self.last_instruction else 0)
+        upcoming = (self.guide or [])[n:]
+        self.panel.set_steps(done, self.last_instruction, upcoming)
