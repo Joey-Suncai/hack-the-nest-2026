@@ -1,0 +1,30 @@
+[
+  {
+    "file": "synth_numbers_chart.png",
+    "app": "Numbers",
+    "goal": "把 A1:B6 的数据做成柱状图",
+    "history": [
+      "选中 A1:B6"
+    ],
+    "target_px": [
+      688,
+      40,
+      778,
+      88
+    ],
+    "note": "合成图：工具栏里的 Chart"
+  },
+  {
+    "file": "synth_settings_dark.png",
+    "app": "System Settings",
+    "goal": "打开深色模式",
+    "history": [],
+    "target_px": [
+      270,
+      374,
+      450,
+      402
+    ],
+    "note": "合成图：侧边栏 Appearance"
+  }
+]
