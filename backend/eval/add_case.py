@@ -34,29 +34,37 @@ def main():
     ap.add_argument("--goal", required=True)
     ap.add_argument("--history", action="append", default=[])
     ap.add_argument("--lang", default="zh")
-    ap.add_argument("--pt", nargs=4, type=int, required=True, metavar=("X1", "Y1", "X2", "Y2"))
+    g = ap.add_mutually_exclusive_group(required=True)
+    g.add_argument("--pt", nargs=4, type=int, metavar=("X1", "Y1", "X2", "Y2"))
+    g.add_argument("--done", action="store_true", help="这张截图里任务已经完成，期望模型返回 done")
+    ap.add_argument("--no-open", action="store_true", help="不打开预览图")
     a = ap.parse_args()
 
     size = logical_screen_size()
     with Image.open(Path(a.image).expanduser()) as img:
         img = img.convert("RGB").resize(size)
-    file = f"{a.name}.png"
-    img.save(CASES / file)
+    file = f"{a.name}.jpg"
+    img.save(CASES / file, "JPEG", quality=88)
 
-    x1, y1, x2, y2 = a.pt
-    box = [min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)]
+    box = None
+    if a.pt:
+        x1, y1, x2, y2 = a.pt
+        box = [min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)]
     labels_path = CASES / "labels.json"
     labels = json.loads(labels_path.read_text()) if labels_path.exists() else []
     labels = [c for c in labels if c["file"] != file]
-    labels.append({"file": file, "app": a.app, "goal": a.goal, "lang": a.lang,
-                   "history": a.history, "target_px": box})
+    case = {"file": file, "app": a.app, "goal": a.goal, "lang": a.lang, "history": a.history}
+    case.update({"target_px": box} if box else {"expect_status": "done"})
+    labels.append(case)
     labels_path.write_text(json.dumps(labels, ensure_ascii=False, indent=2) + "\n")
 
     preview = img.copy()
-    ImageDraw.Draw(preview).rectangle(box, outline=(255, 0, 0), width=4)
+    if box:
+        ImageDraw.Draw(preview).rectangle(box, outline=(255, 0, 0), width=4)
     tmp = Path(tempfile.gettempdir()) / f"showme_label_{a.name}.png"
     preview.save(tmp)
-    subprocess.run(["open", str(tmp)])
+    if not a.no_open:
+        subprocess.run(["open", str(tmp)])
     print(f"已加入 {file}（{size[0]}x{size[1]}），框 {box}；共 {len(labels)} 个 case。预览：{tmp}")
 
 
