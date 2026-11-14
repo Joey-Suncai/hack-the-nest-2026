@@ -6,8 +6,8 @@
 - 优先级：**demo 能稳定跑通 > 功能多**。代码要简单直接，不要过度设计
 
 ## 项目
-- 点子：（待定，定了以后马上填）
-- 技术栈：（待定）
+- 点子：（待定，定了以后马上填）— 先填 `docs/IDEA.md`，再据此更新这里
+- 技术栈：后端 Python 3.12 + FastAPI + `google-genai`（uv 管理，端口 8000）；前端 Vite + React + TypeScript + 纯 CSS（端口 5173）。Gemini 调用只走 `backend/app/gemini.py`；`GEMINI_MOCK=1` 返回假数据。启动：`make setup` / `make dev` / `make mock`
 
 ## 目录与归属
 - `backend/`：API 服务 + Gemini 调用，负责人 A。prompt 放在 `backend/prompts/`
