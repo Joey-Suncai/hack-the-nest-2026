@@ -54,3 +54,22 @@ def test_endpoint_mock_ok(client, monkeypatch):
                                             "history": [{"instruction": "x", "ok": True}]})
     assert r.status_code == 200
     assert r.json()["status"] == "next" and r.json()["box"] == [300, 600, 380, 720]
+
+
+def test_next_step_finalizes_model_output(monkeypatch):
+    monkeypatch.setattr(steps.gemini, "generate_json", lambda *a, **k: NextStepOut(
+        status="next", previous_ok=True, instruction="点图表", target_label="图表",
+        box=[600, 100, 500, 1200], expect="出现菜单"))
+    out = steps.next_step(NextStepIn(app="Numbers", goal="做柱状图", screenshot=TINY_PNG_B64))
+    assert out.box == [500, 100, 600, 1000]
+    assert out.previous_ok is None  # 第一步没有上一步
+
+
+def test_build_prompt_fills_placeholders():
+    body = NextStepIn(app="Numbers", goal="做柱状图", lang="en", screenshot=TINY_PNG_B64,
+                      history=[HistoryItem(instruction="点图表", ok=True)], expect="出现菜单",
+                      guide=["插入 > 图表"])
+    p = steps.build_prompt(body)
+    assert "Numbers" in p and "做柱状图" in p and "English" in p
+    assert "1. 点图表（完成）" in p and "出现菜单" in p and "- 插入 > 图表" in p
+    assert "{" not in p

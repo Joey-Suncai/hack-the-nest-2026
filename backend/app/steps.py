@@ -98,6 +98,39 @@ def mock_next_step(body: NextStepIn) -> NextStepOut:
     )
 
 
+_LANG_NAME = {"zh": "简体中文", "en": "English"}
+_MIME = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}
+
+
+def image_mime(data: bytes) -> str:
+    with Image.open(io.BytesIO(data)) as img:
+        return _MIME.get(img.format or "", "image/jpeg")
+
+
+def build_prompt(body: NextStepIn) -> str:
+    if body.history:
+        history = "\n".join(
+            f"{i}. {h.instruction}" + ("" if h.ok is None else ("（完成）" if h.ok else "（没完成）"))
+            for i, h in enumerate(body.history, 1)
+        )
+    else:
+        history = "（无，这是第一步）"
+    guide = "\n".join(f"- {g}" for g in body.guide) if body.guide else "（无）"
+    return gemini.load_prompt(
+        "next_step",
+        app=body.app.strip() or "当前软件",
+        goal=body.goal.strip(),
+        lang_name=_LANG_NAME[body.lang],
+        history=history,
+        expect=body.expect or "（无）",
+        guide=guide,
+    )
+
+
 def next_step(body: NextStepIn) -> NextStepOut:
-    """真实 Gemini 版（A2 实现）。暂时直接用 mock。"""
-    return mock_next_step(body)
+    """真实 Gemini 版：截图 + 进度 → 下一步。结果一定经过 finalize。"""
+    img = decode_screenshot(body.screenshot)
+    out = gemini.generate_json(build_prompt(body), NextStepOut, files=[(img, image_mime(img))])
+    if not body.history:
+        out = out.model_copy(update={"previous_ok": None})
+    return finalize(out)
