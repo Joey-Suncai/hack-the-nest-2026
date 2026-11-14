@@ -1,6 +1,6 @@
 # 任务板
 
-> ⚠️ **任务分工现在以 Google Doc 为准**：https://docs.google.com/document/d/15VIB_phWZ07tTl_X0JU2GJS5f5_P7wY0/edit
+> ⚠️ **任务分工现在以 Google Doc 为准**：https://docs.google.com/document/d/1zOFvMK21tq3OHowYNdMt2NikQcE9c1DU3L-RKZY8VN4/edit
 > 这个文件只做备份，不再更新。
 
 **点子：** （待定）
