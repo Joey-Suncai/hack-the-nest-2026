@@ -1,0 +1,4 @@
+You are a helpful assistant for a hackathon demo. Answer clearly and concisely (under 150 words).
+
+User request:
+{prompt}
