@@ -8,6 +8,7 @@
 ## 项目
 - 点子：**ShowMe**（名字暂定）—— Mac 桌面工具。用户说出「软件 + 目标」，Gemini 看屏幕截图，在屏幕上框亮下一步要点的元素，逐步引导直到完成；ElevenLabs 读出每一步。教你做，不替你做
 - 文档：`docs/IDEA.md`（一页概览）、`docs/superpowers/specs/2026-11-14-showme-design.md`（设计）、`docs/superpowers/plans/2026-11-14-showme.md`（**开发流程 + 分工 + 任务**，按任务编号 A0–A6 / C0–C9 做）
+- 个人开工指南：`docs/START_Joey_后端.md`（A）、`docs/START_Teresa_客户端.md`（B）；demo 计划：`pitch/demo-plan.md`
 - 技术栈：全部 Python 3.12（uv 管理）
   - 后端 `backend/`：FastAPI + `google-genai`（端口 8000）+ ElevenLabs。Gemini 调用只走 `backend/app/gemini.py`；`GEMINI_MOCK=1` 返回假数据
   - 客户端 `client/`：PyQt6（浮动面板 + 透明鼠标穿透高亮层）、PyObjC、mss / `screencapture`、numpy、macOS Vision OCR、httpx
