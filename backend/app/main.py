@@ -6,10 +6,12 @@
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from typing import Literal
+
 from pydantic import BaseModel
 
-from app import gemini, steps
+from app import gemini, steps, voice
 
 app = FastAPI(title="Hack The Nest 2026 API")
 
@@ -92,3 +94,21 @@ def next_step(body: steps.NextStepIn):
     body.history = body.history[-10:]
     out = steps.mock_next_step(body) if gemini.MOCK else steps.next_step(body)
     return steps.finalize(out)
+
+
+class SpeakIn(BaseModel):
+    text: str
+    lang: Literal["zh", "en"] = "zh"
+
+
+@app.post("/api/speak")
+def speak(body: SpeakIn):
+    text = body.text.strip()
+    if not text:
+        return bad_request("text 不能为空")
+    if len(text) > voice.MAX_CHARS:
+        return bad_request(f"text 太长了（上限 {voice.MAX_CHARS} 字）")
+    mp3 = voice.speak(text, body.lang)
+    if mp3 is None:
+        return Response(status_code=204)
+    return Response(content=mp3, media_type="audio/mpeg")
