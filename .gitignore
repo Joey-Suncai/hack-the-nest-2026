@@ -1,0 +1,22 @@
+# secrets
+.env
+.env.*
+!.env.example
+
+# macOS / exFAT
+.DS_Store
+._*
+
+# deps / build
+node_modules/
+.next/
+dist/
+build/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# large media (share via Google Drive instead)
+pitch/*.mp4
+pitch/*.mov
