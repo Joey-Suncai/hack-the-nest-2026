@@ -2,6 +2,7 @@
 
 labels.json：[{"file": "x.png", "app": "...", "goal": "...", "history": ["已做的步骤", ...],
                "target_px": [x1, y1, x2, y2]}]   # 像素坐标，相对原图
+  任务已完成的截图：不写 target_px，改写 "expect_status": "done"（模型返回 done 才算命中）
 运行：cd backend && uv run python eval/eval_boxes.py [文件名关键字]
 """
 import base64
@@ -55,7 +56,8 @@ def main():
     hits, times, rows = 0, [], []
     for c in cases:
         b64, size = to_jpeg_b64(CASES / c["file"])
-        truth = px_to_norm(c["target_px"], size)
+        want_done = c.get("expect_status") == "done"
+        truth = None if want_done else px_to_norm(c["target_px"], size)
         body = steps.NextStepIn(
             app=c["app"], goal=c["goal"], lang=c.get("lang", "zh"), screenshot=b64,
             history=[steps.HistoryItem(instruction=h, ok=True) for h in c.get("history", [])],
@@ -69,7 +71,9 @@ def main():
         dt = time.perf_counter() - t0
         times.append(dt)
         hit, score = False, 0.0
-        if out and out.box:
+        if want_done:
+            hit = bool(out) and out.status == "done"
+        elif out and out.box:
             cy, cx = (out.box[0] + out.box[2]) / 2, (out.box[1] + out.box[3]) / 2
             hit = truth[0] <= cy <= truth[2] and truth[1] <= cx <= truth[3]
             score = iou(out.box, truth)

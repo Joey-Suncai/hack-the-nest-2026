@@ -26,5 +26,132 @@
       402
     ],
     "note": "合成图：侧边栏 Appearance"
+  },
+  {
+    "file": "settings_1.jpg",
+    "app": "系统设置",
+    "goal": "把系统外观切换成浅色模式",
+    "lang": "zh",
+    "history": [],
+    "target_px": [
+      240,
+      552,
+      433,
+      578
+    ]
+  },
+  {
+    "file": "settings_2.jpg",
+    "app": "系统设置",
+    "goal": "打开深色模式",
+    "lang": "zh",
+    "history": [
+      "点击侧边栏的「外观」"
+    ],
+    "target_px": [
+      845,
+      100,
+      907,
+      138
+    ]
+  },
+  {
+    "file": "settings_3.jpg",
+    "app": "系统设置",
+    "goal": "打开深色模式",
+    "lang": "zh",
+    "history": [
+      "点击侧边栏的「外观」",
+      "点击「深色」"
+    ],
+    "expect_status": "done"
+  },
+  {
+    "file": "numbers_1.jpg",
+    "app": "Numbers",
+    "goal": "把 A1:B6 的数据做成柱状图",
+    "lang": "zh",
+    "history": [],
+    "target_px": [
+      37,
+      189,
+      285,
+      344
+    ]
+  },
+  {
+    "file": "numbers_2.jpg",
+    "app": "Numbers",
+    "goal": "把 A1:B6 的数据做成柱状图",
+    "lang": "zh",
+    "history": [
+      "选中 A1:B6"
+    ],
+    "target_px": [
+      705,
+      42,
+      747,
+      86
+    ]
+  },
+  {
+    "file": "numbers_3.jpg",
+    "app": "Numbers",
+    "goal": "把 A1:B6 的数据做成柱状图",
+    "lang": "zh",
+    "history": [
+      "选中 A1:B6",
+      "点击工具栏的「图表」"
+    ],
+    "target_px": [
+      634,
+      144,
+      703,
+      186
+    ]
+  },
+  {
+    "file": "ppt_1.jpg",
+    "app": "PowerPoint",
+    "goal": "新加一页带标题的幻灯片，并输入标题",
+    "lang": "zh",
+    "history": [],
+    "target_px": [
+      117,
+      108,
+      154,
+      166
+    ]
+  },
+  {
+    "file": "ppt_2.jpg",
+    "app": "PowerPoint",
+    "goal": "新加一页带标题的幻灯片，并输入标题",
+    "lang": "zh",
+    "history": [
+      "点击「新建幻灯片」"
+    ],
+    "target_px": [
+      120,
+      176,
+      303,
+      223
+    ]
+  },
+  {
+    "file": "ppt_3.jpg",
+    "app": "PowerPoint",
+    "goal": "新加一页带标题的幻灯片，并输入标题",
+    "lang": "zh",
+    "history": [
+      "点击「新建幻灯片」",
+      "选择「标题和内容」版式"
+    ],
+    "target_px": [
+      338,
+      308,
+      1085,
+      403
+    ]
   }
 ]
