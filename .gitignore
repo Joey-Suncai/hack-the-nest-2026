@@ -15,6 +15,7 @@ build/
 __pycache__/
 *.pyc
 .venv/
+*.tsbuildinfo
 venv/
 
 # large media (share via Google Drive instead)
