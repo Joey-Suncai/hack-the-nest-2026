@@ -53,7 +53,7 @@ def main():
         sys.exit("GEMINI_MOCK=1 时评测没有意义，用 GEMINI_MOCK=0 运行")
     key = sys.argv[1] if len(sys.argv) > 1 else ""
     cases = [c for c in json.loads((CASES / "labels.json").read_text()) if key in c["file"]]
-    hits, times, rows = 0, [], []
+    hits, times, ious = 0, [], []
     for c in cases:
         b64, size = to_jpeg_b64(CASES / c["file"])
         want_done = c.get("expect_status") == "done"
@@ -78,12 +78,15 @@ def main():
             hit = truth[0] <= cy <= truth[2] and truth[1] <= cx <= truth[3]
             score = iou(out.box, truth)
         hits += hit
+        if not want_done:
+            ious.append(score)
         detail = err or f"{out.status} box={out.box} label={out.target_label!r} 「{out.instruction}」"
         print(f"{'✅' if hit else '❌'} {c['file']:<32} IoU={score:.2f} {dt:5.1f}s  {detail}")
     n = len(cases)
     if n:
-        print(f"\n模型 {gemini.MODEL}：命中率 {hits}/{n} = {hits / n:.0%}，平均耗时 {sum(times) / n:.1f}s，"
-              f"最慢 {max(times):.1f}s")
+        miou = sum(ious) / len(ious) if ious else 0
+        print(f"\n模型 {gemini.MODEL}（两步定位 {'开' if steps.REFINE else '关'}）：命中率 {hits}/{n} = {hits / n:.0%}，"
+              f"平均 IoU {miou:.2f}，平均耗时 {sum(times) / n:.1f}s，最慢 {max(times):.1f}s")
 
 
 if __name__ == "__main__":
