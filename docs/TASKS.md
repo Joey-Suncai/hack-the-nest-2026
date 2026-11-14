@@ -1,5 +1,8 @@
 # 任务板
 
+> ⚠️ **任务分工现在以 Google Doc 为准**：https://docs.google.com/document/d/15VIB_phWZ07tTl_X0JU2GJS5f5_P7wY0/edit
+> 这个文件只做备份，不再更新。
+
 **点子：** （待定）
 **分工：** A（后端 / AI）= ___　B（前端 / 产品 / 路演）= ___
 **赛道（最多 3 个）：** AI/ML、___、___　+ Devpost 上勾选 MLH Best Use of Gemini API
