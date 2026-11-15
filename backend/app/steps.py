@@ -20,6 +20,18 @@ class HistoryItem(BaseModel):
     ok: bool | None = None
 
 
+class Element(BaseModel):
+    """客户端用 macOS 辅助功能读到的真实控件，box 和返回的 box 同一个坐标系（0–1000）。"""
+
+    id: int
+    role: str
+    name: str | None = None
+    box: list[int]
+
+
+MAX_ELEMENTS = 250
+
+
 class NextStepIn(BaseModel):
     app: str
     goal: str
@@ -30,6 +42,7 @@ class NextStepIn(BaseModel):
     guide: list[str] | None = None
     user_note: str | None = None
     frontmost_app: str | None = None
+    elements: list[Element] | None = None  # 读不到辅助功能时为 null，行为和以前完全一样
 
 
 class NextGuess(BaseModel):
@@ -48,6 +61,7 @@ class NextStepOut(BaseModel):
     box: list[int] | None
     expect: str | None
     next_guess: NextGuess | None = None
+    element_id: int | None = None  # 选中的 elements 里的编号；null = 框是 Gemini 自己给的
 
 
 def decode_screenshot(b64: str) -> bytes:
@@ -84,8 +98,23 @@ _FALLBACK = {
 }
 
 
-def finalize(out: NextStepOut, lang: str = "zh") -> NextStepOut:
-    """保证传给客户端的数据合法：next 一定有有效框，done / unsure 一定没有框。"""
+def find_element(elements: list[Element] | None, element_id: int | None) -> Element | None:
+    """按编号找请求里的控件，框无效也当没找到。"""
+    if element_id is None or not elements:
+        return None
+    for e in elements:
+        if e.id == element_id and normalize_box(e.box) is not None:
+            return e
+    return None
+
+
+def finalize(out: NextStepOut, lang: str = "zh", elements: list[Element] | None = None) -> NextStepOut:
+    """保证传给客户端的数据合法：next 一定有有效框，done / unsure 一定没有框。
+    element_id 对得上请求里的控件时，用控件的精确框和名字；对不上就清空 element_id、保留模型的框。"""
+    el = find_element(elements, out.element_id) if out.status == "next" else None
+    if el is not None:
+        name = (el.name or "").strip()
+        out = out.model_copy(update={"box": el.box, "target_label": name or out.target_label})
     box = normalize_box(out.box)
     status = out.status
     if status == "next" and box is None:
@@ -99,7 +128,9 @@ def finalize(out: NextStepOut, lang: str = "zh") -> NextStepOut:
         guess = None
     else:
         guess = guess.model_copy(update={"label": guess.label.strip(), "instruction": guess.instruction.strip()})
-    return out.model_copy(update={"status": status, "box": box, "instruction": instruction, "next_guess": guess})
+    element_id = el.id if el is not None and status == "next" else None
+    return out.model_copy(update={"status": status, "box": box, "instruction": instruction, "next_guess": guess,
+                                  "element_id": element_id})
 
 
 _MOCK_BOXES = [[450, 450, 550, 550], [300, 600, 380, 720], [600, 250, 680, 400]]
@@ -111,6 +142,11 @@ def mock_next_step(body: NextStepIn) -> NextStepOut:
     if n >= len(_MOCK_BOXES):
         return NextStepOut(status="done", previous_ok=previous_ok, instruction="[MOCK] 完成了！",
                            target_label=None, box=None, expect=None)
+    named = next((e for e in body.elements or [] if (e.name or "").strip()), None)
+    if named is not None:  # 有 elements：选第一个有名字的控件，方便客户端测整条链路
+        return NextStepOut(status="next", previous_ok=previous_ok, instruction=f"[MOCK] 点击 {named.name.strip()}",
+                           target_label=named.name.strip(), box=named.box, expect="[MOCK] 画面有变化",
+                           element_id=named.id)
     return NextStepOut(
         status="next",
         previous_ok=previous_ok,
@@ -132,6 +168,20 @@ def image_mime(data: bytes) -> str:
         return _MIME.get(img.format or "", "image/jpeg")
 
 
+def _clean(text: str, limit: int = 60) -> str:
+    return " ".join(text.split()).replace('"', "'")[:limit]
+
+
+def elements_section(elements: list[Element]) -> str:
+    """一行一个控件：#12 AXButton "New Tab" [40,950,62,966]"""
+    lines = []
+    for e in elements[:MAX_ELEMENTS]:
+        name = _clean(e.name or "")
+        label = f'"{name}"' if name else "null"
+        lines.append(f"#{e.id} {_clean(e.role, 30)} {label} [{','.join(str(v) for v in e.box)}]")
+    return gemini.load_prompt("next_step_elements", elements="\n".join(lines))
+
+
 def build_prompt(body: NextStepIn) -> str:
     if body.history:
         history = "\n".join(
@@ -141,7 +191,7 @@ def build_prompt(body: NextStepIn) -> str:
     else:
         history = "（无，这是第一步）"
     guide = "\n".join(f"- {g}" for g in body.guide) if body.guide else "（无）"
-    return gemini.load_prompt(
+    prompt = gemini.load_prompt(
         "next_step",
         app=body.app.strip() or "当前软件",
         goal=body.goal.strip(),
@@ -152,6 +202,9 @@ def build_prompt(body: NextStepIn) -> str:
         user_note=(body.user_note or "").strip() or "（无）",
         frontmost_app=(body.frontmost_app or "").strip() or "（未知）",
     )
+    if body.elements:  # 没有 elements 时 prompt 和以前一字不差（评测结果可比）
+        prompt += "\n" + elements_section(body.elements)
+    return prompt
 
 
 # ---------- 两步定位：小框裁剪放大后再问一次 ----------
@@ -248,12 +301,16 @@ def next_step(body: NextStepIn) -> NextStepOut:
     t2 = time.perf_counter()
     if not body.history:
         out = out.model_copy(update={"previous_ok": None})
-    out = finalize(out, body.lang)
+    out = finalize(out, body.lang, body.elements)
+    if body.elements:
+        el = find_element(body.elements, out.element_id)
+        print(f"[next-step] element #{el.id} {el.role} {el.name!r}" if el else "[next-step] own box (no element)")
     # 上一步没成功：history 标了 ok=false、或者用户刚说了什么（点错了 / 没反应）、或者模型判断上一步没完成
     retry = REFINE_ON_RETRY and bool(body.history) and (
         body.history[-1].ok is False or bool((body.user_note or "").strip()) or out.previous_ok is False
     )
-    out = finalize(refine_box(img, out, force=retry), body.lang)
+    if out.element_id is None:  # 选中了控件就不精修：框已经是精确的
+        out = finalize(refine_box(img, out, force=retry), body.lang)
     t3 = time.perf_counter()
     LAST_TIMING.clear()
     LAST_TIMING.update(prep=(t1 - t0) * 1000, gemini=(t2 - t1) * 1000, post=(t3 - t2) * 1000, total=(t3 - t0) * 1000)
