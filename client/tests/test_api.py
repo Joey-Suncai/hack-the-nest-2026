@@ -13,7 +13,7 @@ def test_connection_error_is_friendly(monkeypatch):
         raise httpx.ConnectError("refused")
 
     _use(monkeypatch, boom)
-    with pytest.raises(api.ApiError, match="连不上后端"):
+    with pytest.raises(api.ApiError, match="reach the server"):
         api.next_step({})
 
 

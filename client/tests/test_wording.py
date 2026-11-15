@@ -20,3 +20,15 @@ def test_english():
 def test_caption_duration_has_floor_and_grows():
     assert estimate_seconds("好") == 2.5
     assert estimate_seconds("字" * 40) > estimate_seconds("字" * 10)
+
+
+def test_ui_text_defaults_to_english():
+    from showme import i18n
+
+    i18n.set_lang("en")
+    assert i18n.t("looking") == "Looking at your screen…"
+    assert i18n.DEFAULT_LANG == "en"
+    i18n.set_lang("zh")
+    assert i18n.t("looking") == "正在看你的屏幕…"
+    i18n.set_lang("xx")  # 不认识的语言退回默认
+    assert i18n.get_lang() == "en"

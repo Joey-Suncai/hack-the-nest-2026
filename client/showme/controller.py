@@ -15,6 +15,7 @@ from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
 from showme import api, capture, wording
+from showme.i18n import t
 from showme.change import ChangeDetector, mask_rects
 from showme.config import HIGHLIGHT_PAD, POLL_S
 from showme.coords import box_to_rect, expand
@@ -40,7 +41,7 @@ class _Job(QRunnable):
             self.signals.err.emit(e.message)
         except Exception as e:  # noqa: BLE001  任何意外都不能让客户端崩
             traceback.print_exc()
-            self.signals.err.emit(f"客户端出错了：{e}")
+            self.signals.err.emit(t("client_error", e=e))
 
 
 class Controller(QObject):
@@ -81,9 +82,15 @@ class Controller(QObject):
         self.overlay.clear()
         self.narrator.stop()
         if self.state != IDLE:
-            self.panel.set_status("已停止")
+            self.panel.set_status(t("stopped"))
         self.state = IDLE
         self.panel.set_running(False)
+
+    def shutdown(self):
+        """退出前调用：停掉轮询、语音，后面回来的请求结果都丢掉。"""
+        self._token += 1
+        self.poll.stop()
+        self.narrator.stop()
 
     def retry(self):
         if self.state in (PAUSED, WAITING):
@@ -110,7 +117,7 @@ class Controller(QObject):
     def _request(self):
         self.state = REQUESTING
         self.poll.stop()
-        self.panel.set_status("正在看你的屏幕…")
+        self.panel.set_status(t("looking"))
         with self.overlay.hidden():
             img = capture.grab()
         self._img = img
@@ -139,7 +146,7 @@ class Controller(QObject):
             self.last_instruction = text
             self.expect = r.get("expect")
             self.panel.set_step(len(self.history) + 1, text)
-            self.panel.set_status("做完这一步，框会自动跳到下一步")
+            self.panel.set_status(t("do_step"))
             self._update_steps()
             # 第 1 步排在开场白后面；之后每一步打断上一句没读完的
             self.narrator.say(text, interrupt=bool(self.history))
@@ -147,7 +154,7 @@ class Controller(QObject):
         elif status == "done":
             self.overlay.clear()
             self.state = IDLE
-            self.panel.step_label.setText("完成！")
+            self.panel.step_label.setText(t("done"))
             self.panel.set_status("")
             self.panel.set_steps([h["instruction"] for h in self.history], None, [])
             self.panel.set_running(False)
@@ -155,7 +162,8 @@ class Controller(QObject):
         else:  # unsure
             self.overlay.clear()
             self.last_instruction = None
-            self.panel.set_status(text or "看不出下一步该点哪里")
+            # 比如 Zoom 底部工具栏自动隐藏了：提示用户动一下鼠标，画面一变就自动再问（也可以按「重试」）
+            self.panel.set_status(f"{text or t('unsure')}\n{t('unsure_hint')}")
             self.panel.allow_retry(True)
             self.narrator.say(text, interrupt=True)
             self._wait()
@@ -167,29 +175,41 @@ class Controller(QObject):
 
     def _wait(self):
         self.state = WAITING
-        self._need_baseline = True
+        self._base_raw = None
+        self._masks: list[tuple[int, int, int, int]] = []
         self.poll.start()
 
-    def _frame(self):
+    def _masked(self, small):
         screen = QApplication.primaryScreen().geometry()
+        return mask_rects(small, self._masks, screen.width(), screen.height())
+
+    def _grow_masks(self) -> bool:
+        """把高亮框、气泡、字幕、面板占过的区域都遮住。同一步里只增不减：
+        字幕消失 / 换一句，不能被当成「画面变了」。返回遮罩有没有变大。"""
         g = self.panel.frameGeometry()
-        masks = self.overlay.painted_rects() + [(g.x(), g.y(), g.width(), g.height())]
-        small = capture.to_small_gray(capture.grab())
-        return mask_rects(small, masks, screen.width(), screen.height())
+        grew = False
+        for r in self.overlay.painted_rects() + [(g.x(), g.y(), g.width(), g.height())]:
+            if r not in self._masks:
+                self._masks.append(r)
+                grew = True
+        return grew
 
     def _on_poll(self):
         if self.state != WAITING:
             return
         try:
-            frame = self._frame()
+            raw = capture.to_small_gray(capture.grab())
         except Exception as e:  # noqa: BLE001
-            self._on_error(f"截屏失败：{e}")
+            self._on_error(t("capture_failed", e=e))
             return
-        if self._need_baseline:  # 基准帧在高亮层显示之后取
-            self.detector.reset(frame)
-            self._need_baseline = False
+        grew = self._grow_masks()
+        if self._base_raw is None:  # 基准帧在高亮层显示之后取
+            self._base_raw = raw
+            self.detector.reset(self._masked(raw))
             return
-        if self.detector.feed(frame):
+        if grew:  # 新出现了一句字幕：基准帧用同样的遮罩重算
+            self.detector.reset(self._masked(self._base_raw))
+        if self.detector.feed(self._masked(raw)):
             if self.last_instruction:
                 self.history.append({"instruction": self.last_instruction, "ok": True})
             self._request()

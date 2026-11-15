@@ -17,6 +17,8 @@ BUBBLE_MAX_W = 420
 
 def apply_macos_window_settings(widget: QWidget, level: int | None = None, click_through: bool = False):
     """置顶到状态栏层级、所有桌面可见、失去焦点不隐藏；可选鼠标穿透。"""
+    if QApplication.platformName() != "cocoa":  # 离屏测试时 winId 不是 NSView，硬转会段错误
+        return
     try:
         import objc
         from AppKit import (
@@ -92,7 +94,9 @@ class Overlay(QWidget):
         self.update()
 
     def show_caption(self, text: str) -> None:
-        """屏幕底部居中的字幕。"""
+        """屏幕底部居中的字幕（config.CAPTIONS = False 时不显示）。"""
+        if not C.CAPTIONS:
+            return
         old = self._caption_rect
         self._caption = text
         self._caption_rect = self._layout_caption()
@@ -112,8 +116,8 @@ class Overlay(QWidget):
             out.append(self._rect.adjusted(-g, -g, g, g))
         if self._bubble is not None:
             out.append(self._bubble.adjusted(-4, -4, 4, 4))
-        # 字幕区域一直遮住：字幕出现 / 消失本身不能被当成「画面变了」
-        out.append(self.caption_band())
+        if self._caption_rect is not None:
+            out.append(self._caption_rect.adjusted(-8, -8, 8, 8))
         return [(r.x(), r.y(), r.width(), r.height()) for r in out]
 
     @contextmanager
@@ -156,12 +160,6 @@ class Overlay(QWidget):
             y = self._rect.top() - C.GLOW_SIZE // 2 - BUBBLE_GAP - h
         return QRect(x, max(8, y), w, h)
 
-    def caption_band(self) -> QRect:
-        """字幕可能出现的整条底部区域（最多约 3 行字）。"""
-        screen = self.rect()
-        top = screen.bottom() - C.CAPTION_BOTTOM - (C.CAPTION_FONT_SIZE * 3 + 60)
-        return QRect(0, top, screen.width(), screen.height() - top)
-
     def _layout_caption(self) -> QRect:
         fm = QFontMetrics(self._caption_font)
         screen = self.rect()
@@ -193,6 +191,7 @@ class Overlay(QWidget):
         if self._rect is None:
             p.end()
             return
+        p.setBrush(Qt.BrushStyle.NoBrush)  # 框里面不能填色（之前沿用了字幕的黑底）
         color = QColor(C.HIGHLIGHT_COLOR)
         k = self._breath()
         r = QRectF(self._rect)

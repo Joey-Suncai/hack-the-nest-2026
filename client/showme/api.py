@@ -3,6 +3,7 @@
 import httpx
 
 from showme.config import API_BASE
+from showme.i18n import t
 
 
 class ApiError(Exception):
@@ -18,14 +19,14 @@ def _request(method: str, path: str, timeout: float, **kw) -> httpx.Response:
     try:
         r = _client.request(method, path, timeout=timeout, **kw)
     except httpx.TimeoutException:
-        raise ApiError("后端响应超时，请点「重试」")
+        raise ApiError(t("err_timeout"))
     except httpx.HTTPError:
-        raise ApiError("连不上后端，请先运行 make backend")
+        raise ApiError(t("err_connect"))
     if r.status_code >= 400:
         try:
             msg = r.json()["error"]
         except Exception:  # noqa: BLE001
-            msg = f"后端出错了（HTTP {r.status_code}）"
+            msg = t("err_http", code=r.status_code)
         raise ApiError(msg)
     return r
 

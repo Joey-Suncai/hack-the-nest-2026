@@ -27,6 +27,7 @@ BUBBLE_BG = "#1C1C1E"  # 提示气泡背景
 BUBBLE_FG = "#FFFFFF"  # 提示气泡文字
 
 # ---- 字幕（屏幕底部居中）----
+CAPTIONS = False  # 先不用字幕，只用 ElevenLabs 语音；改成 True 就重新显示
 CAPTION_FONT_SIZE = 22
 CAPTION_BOTTOM = 72  # 离屏幕底部多远
 CAPTION_MAX_W = 0.6  # 最宽占屏幕宽度的比例

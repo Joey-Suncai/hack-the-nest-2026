@@ -14,6 +14,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from showme import i18n
+from showme.i18n import t
 from showme.overlay import apply_macos_window_settings
 
 STYLE = """
@@ -57,18 +59,19 @@ class Panel(QWidget):
 
         self.title = QLabel("ShowMe")
         self.title.setObjectName("title")
-        self.app_edit = QLineEdit(placeholderText="软件，比如 Numbers")
-        self.goal_edit = QLineEdit(placeholderText="你想做什么，比如 把这列数据做成柱状图")
+        self.app_edit = QLineEdit()
+        self.goal_edit = QLineEdit()
         self.lang_box = QComboBox()
+        self.lang_box.addItem("English", "en")  # 第一项 = 默认语言
         self.lang_box.addItem("中文", "zh")
-        self.lang_box.addItem("English", "en")
-        self.voice_box = QCheckBox("语音")
+        self.lang_box.setCurrentIndex(self.lang_box.findData(i18n.DEFAULT_LANG))
+        self.voice_box = QCheckBox()
         self.voice_box.setChecked(True)
 
-        self.start_btn = QPushButton("开始")
+        self.start_btn = QPushButton()
         self.start_btn.setObjectName("start")
-        self.stop_btn = QPushButton("停止")
-        self.retry_btn = QPushButton("重试")
+        self.stop_btn = QPushButton()
+        self.retry_btn = QPushButton()
         self.stop_btn.setEnabled(False)
         self.retry_btn.setEnabled(False)
 
@@ -116,6 +119,8 @@ class Panel(QWidget):
         self.goal_edit.returnPressed.connect(self._on_start)
         self.stop_btn.clicked.connect(self.stop_requested)
         self.retry_btn.clicked.connect(self.retry_requested)
+        self.lang_box.currentIndexChanged.connect(self._retranslate)
+        self._retranslate()
 
         self.adjustSize()
         area = QApplication.primaryScreen().availableGeometry()
@@ -183,11 +188,20 @@ class Panel(QWidget):
     def _on_start(self):
         app, goal = self.app_edit.text().strip(), self.goal_edit.text().strip()
         if not goal:
-            self.set_error("先写下你想做什么")
+            self.set_error(t("need_goal"))
             return
         self.step_label.setText("")
         self.set_steps([], None, [])
-        self.start_requested.emit(app or "当前软件", goal)
+        self.start_requested.emit(app or t("current_app"), goal)
+
+    def _retranslate(self, *_):
+        i18n.set_lang(self.lang())
+        self.app_edit.setPlaceholderText(t("app_ph"))
+        self.goal_edit.setPlaceholderText(t("goal_ph"))
+        self.voice_box.setText(t("voice"))
+        self.start_btn.setText(t("start"))
+        self.stop_btn.setText(t("stop"))
+        self.retry_btn.setText(t("retry"))
 
     def _fit(self):
         self.adjustSize()
