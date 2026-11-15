@@ -840,6 +840,7 @@ class Controller(QObject):
             return
         r = self.overlay._rect
         self._down = (x, y, (r.x(), r.y(), r.width(), r.height()))
+        self._down_raw = getattr(self, "_last_raw", None)  # 点之前的画面（轮询的最新一帧）：点偏了时用来复查
         suspend = getattr(self.overlay, "suspend", None)
         if suspend is not None:
             suspend()
@@ -855,6 +856,7 @@ class Controller(QObject):
             resume = getattr(self.overlay, "resume", None)
             if resume is not None:
                 resume()
+            self._schedule_miss_recheck()  # 点在框外也在 1.5 s 后看一眼：也许点对了地方（框偏了），也许点开了别的
 
     def _click_completes(self, down_pt, up_pt, rect) -> bool:
         prov = self.state == REQUESTING and self._provisional is not None
@@ -982,12 +984,46 @@ class Controller(QObject):
         """用户又点了 / 按了键 / 说了话：之后画面的变化是新的操作造成的，不复查。"""
         self._recheck = None
 
+    def _schedule_miss_recheck(self):
+        """点在框外（框画回来了）：松开后 RECHECK_AFTER_S 秒和点之前的画面比。变了 = 用户确实做了点什么
+        （点对了地方但框偏了 / 点开了别的）→ 用最新画面重新看，做对没做对交给 Gemini 判断；没变 → 继续等。"""
+        base = getattr(self, "_down_raw", None)
+        if self.state != WAITING or self.task is None or base is None:
+            return
+        rc = {"base": base, "token": self._token, "hist": len(self.history)}
+        self._recheck = rc
+        QTimer.singleShot(int(RECHECK_AFTER_S * 1000), lambda: self._miss_recheck_tick(rc))
+
+    def _miss_recheck_tick(self, rc):
+        if getattr(self, "_recheck", None) is not rc:
+            return
+        self._recheck = None
+        if self.task is None or self.state != WAITING or self._token != rc["token"] \
+                or len(self.history) != rc["hist"] or getattr(self, "_step_done", False):
+            return
+        try:
+            self._grow_masks()
+            d = _diff(self._masked(capture.to_small_gray(capture.grab())), rc["base"])
+        except Exception as e:  # noqa: BLE001
+            dbg(f"[recheck] 截图失败：{e}")
+            return
+        if d <= CHANGE_THRESHOLD:
+            print(f"[recheck] 点在框外，{RECHECK_AFTER_S:.1f} s 后画面没变（diff={d:.4f}）：继续等你点框", flush=True)
+            return
+        print(f"[recheck] 点在框外，但 {RECHECK_AFTER_S:.1f} s 后画面变了（diff={d:.4f}）→ 用最新画面重新看", flush=True)
+        self._last_raw = rc["base"]  # 等画面稳定时，用点之前那一帧当基准
+        self._step_completed("click_changed")
+
     def _recheck_tick(self, rc):
         if getattr(self, "_recheck", None) is not rc:
             return  # 已经作废（用户又操作了 / 换了一步）
         self._recheck = None
+        # _step_done 只在 WAITING 时才表示「用户已经做完了新显示的那一步」：REQUESTING 时它还是上一步的
+        # 「已完成」（Gemini 通常 1.5 s 时还没回来）。以前不分状态就跳过，结果复查一次都没跑（日志 0 行 [recheck]）
+        busy = self.state == WAITING and getattr(self, "_step_done", False)
         if self.task is None or self.state not in (REQUESTING, WAITING) or self._token != rc["token"] \
-                or len(self.history) != rc["hist"] or getattr(self, "_step_done", False):
+                or len(self.history) != rc["hist"] or busy:
+            print("[recheck] 跳过：已经停止 / 换了任务 / 进到下一步了", flush=True)
             return  # 停止了、用户说了话、已经进到下一步，或者用户已经在做下一步
         try:
             now = capture.grab()

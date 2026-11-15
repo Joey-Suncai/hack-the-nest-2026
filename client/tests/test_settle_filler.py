@@ -172,8 +172,9 @@ def _signals(monkeypatch, kind, inputs_ok=True, fired=True):
                               detector=types.SimpleNamespace(feed=lambda f: fired, reset=lambda f: None))
     c._step_completed = lambda reason, detail=None: done.append(reason)
     c._down = None
+    c.task, c._token, c.history = {"goal": "x"}, 0, []
     for name in ("_on_click", "_on_mouse_down", "_on_mouse_up", "_click_completes", "_on_key", "_on_poll",
-                 "_screen_only_backup", "_cancel_recheck"):
+                 "_screen_only_backup", "_cancel_recheck", "_schedule_miss_recheck", "_miss_recheck_tick"):
         setattr(c, name, types.MethodType(getattr(Controller, name), c))
     return c, done
 
@@ -447,3 +448,55 @@ def test_recheck_cancelled_by_new_user_action_or_next_step(monkeypatch):
     c.history.append(3)  # 已经进到下一步
     timers[1][1]()
     assert requests == []
+
+
+def test_recheck_still_runs_while_gemini_is_thinking(monkeypatch, capsys):
+    # 真实情况：1.5 s 时 Gemini 还没回来，state=REQUESTING、_step_done 仍是上一步的 True。以前这里直接跳过
+    c, timers, requests, _ = _recheck_ctl(monkeypatch, [0.6])
+    c._step_done = True
+    c._schedule_recheck("req", None, "old")
+    timers[0][1]()
+    assert len(requests) == 1 and "又变了" in capsys.readouterr().out
+
+
+def _miss_ctl(monkeypatch, frame):
+    c, done = _mouse(monkeypatch)
+    timers = []
+    monkeypatch.setattr(ctl.QTimer, "singleShot", staticmethod(lambda ms, fn: timers.append((ms, fn))))
+    monkeypatch.setattr(capture, "grab", lambda: "now")
+    monkeypatch.setattr(capture, "to_small_gray", lambda img: np.full((64, 64), frame, np.float32))
+    c.task, c._token, c.history, c._recheck = {"goal": "x"}, 1, [], None
+    c._last_raw = np.zeros((64, 64), np.float32)  # 点之前的画面
+    for name in ("_schedule_miss_recheck", "_miss_recheck_tick"):
+        setattr(c, name, types.MethodType(getattr(Controller, name), c))
+    return c, done, timers
+
+
+def test_miss_keeps_box_and_rechecks_unchanged_screen(monkeypatch, capsys):
+    c, done, timers = _miss_ctl(monkeypatch, 0.0)
+    c._on_mouse_down(400, 600)
+    c._on_mouse_up(400, 600)  # 点在框外
+    assert c.overlay._rect is not None and c.overlay.calls == ["suspend", "resume"]  # 框画回来、保持
+    (ms, fn), = timers
+    assert abs(ms - ctl.RECHECK_AFTER_S * 1000) < 1
+    fn()
+    assert done == [] and c.overlay._rect is not None and "画面没变" in capsys.readouterr().out
+
+
+def test_miss_with_screen_change_asks_again(monkeypatch, capsys):
+    c, done, timers = _miss_ctl(monkeypatch, 0.6)
+    c._on_mouse_down(400, 600)
+    c._on_mouse_up(400, 600)
+    timers[0][1]()
+    assert done == ["click_changed"] and c.overlay._rect is not None  # 重新看；框留着，直到新的一步出来
+    assert "画面变了" in capsys.readouterr().out
+
+
+def test_miss_recheck_cancelled_by_next_click(monkeypatch):
+    c, done, timers = _miss_ctl(monkeypatch, 0.6)
+    c._on_mouse_down(400, 600)
+    c._on_mouse_up(400, 600)
+    c._on_mouse_down(120, 210)  # 1.5 s 内又点了一下（点中了框）
+    c._on_mouse_up(120, 210)
+    timers[0][1]()
+    assert done == ["click"]  # 复查作废，只算这一次点中
