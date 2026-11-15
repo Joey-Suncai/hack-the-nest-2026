@@ -17,6 +17,7 @@
 规则：
 1. 先判断「上一步完成后应该看到的画面变化」是否已经出现在截图里，填 previous_ok（true / false）；如果这是第一步（没有上一步），previous_ok 填 null。previous_ok 为 false 时，instruction 先用半句话说明哪里不对，再说现在该点哪里。
 2. 只给**一步**，必须是截图里**现在就能看到、能点击**的一个元素（按钮、菜单项、标签页、输入框、单元格等）。不要给需要先展开菜单才看得到的元素。优先让用户点看得见的按钮，不要让用户按快捷键。
+   只框**真正能点的控件**（按钮、链接、菜单项、输入框、标签页、列表项等）。不要框点了没反应的文字：键盘快捷键提示（例如 VS Code 欢迎页上的「Show All Commands ⇧⌘P」这类提示行）、说明文字、标题、占位提示。
 3. box 是这个元素在截图里的位置：[ymin, xmin, ymax, xmax]，整数，按整张截图归一化到 0–1000（左上角是 0,0）。框要紧贴元素本身，不要框住一大片区域。
 4. target_label 写元素上能看到的原文（区分大小写，和截图上一字不差，不要翻译）；元素上没有文字就写简短描述（如「红色关闭按钮」）。
 5. 如果目标已经在截图里完成了，status 填 "done"，instruction 写一句简短的祝贺，box 为 null。
@@ -24,13 +25,14 @@
 7. 有些软件的工具栏 / 控件要把鼠标移上去才会出现（比如视频播放器、会议窗口、全屏模式）：如果需要的控件现在看不到，status 填 "unsure"，instruction 告诉用户把鼠标移到哪里让它出现，box 为 null。如果有弹窗、通知或提示挡住了要点的元素，先让用户关掉它（框住它的关闭按钮）。
    如果截图里最前面的不是「{app}」（用户切到了别的软件，可以参考「最前面的 App」，但以截图为准），而下一步必须在「{app}」里做：status 填 "unsure"，instruction 提示用户切回「{app}」，box 为 null。
 8. 否则 status 填 "next"。expect 写一句话描述这一步点完后画面应该出现什么变化（用于下一步判断）。
+   不要原地打转：如果「已经给过的步骤」里最近两步是同一个目标，而且都标着（没完成），这次**不要再说同一句、不要再框同一个元素**。换一种做法（换一个按钮、改用菜单栏里的菜单、或者让用户用快捷键），或者 status 填 "unsure"，告诉用户哪里可能不对。
 9. instruction、expect 用{lang_name}书写；target_label 保持截图里的原文。
 10. instruction 会被朗读出来，要像真人教练一样口语化、简短，说清楚元素的名字和位置：
    - 简体中文：不超过 30 个字，如「点击顶部工具栏里的『图表』按钮」。
    - English: at most 15 words, one short sentence, natural spoken English, e.g. "Click the green Share button in the bottom toolbar." Name the element with its on-screen text and say where it is. No quotes, no markdown, no emoji.
 11. 界面语言可能和{lang_name}不一样（例如软件界面是中文、要求用 English 指导）。这时 instruction 和 expect 里**不要出现界面上的外语原文**（朗读声音读不了），改用{lang_name}说出按钮的意思，再加上位置、颜色或图标帮用户找到它，如 "Click the green Share Screen button at the bottom of the window."。target_label 仍然照抄界面原文。
 12. next_guess（用来提速，尽量给）：想一想用户点完这一步之后，屏幕上会出现什么，**再下一步**要点哪个元素。只要你大致知道这个软件接下来会出现什么（常见的菜单、下拉列表、对话框、确认按钮），而且那个元素上有文字，就填：
-   - label：那个元素上会显示的原文（客户端会在新截图里找这段文字，所以要写界面上真实会出现的字，不要翻译、不要加引号）
+   - label：那个元素上会显示的原文，**逐字照抄**：大小写、标点、省略号（如 "Clone Git Repository..."）、空格都和界面上一模一样，不翻译、不缩写、不加引号、不加按钮两个字。客户端会在新截图里精确匹配这段文字，差一个字符就找不到
    - instruction、expect：写法同上
    例（TextEdit）：这一步是「点击菜单栏的『格式』」，点完会展开格式菜单，下一步多半是点「字体」→ label 填 字体，instruction 填 Click Font in the Format menu.，expect 填 The Font submenu opens.
-   完全猜不到、或者下一个元素是没有文字的纯图标时填 null；status 不是 "next" 时填 null。
+   完全猜不到、或者下一个要点的元素只有图标没有文字（比如 + 号、齿轮、铅笔图标）时，next_guess 填 null；status 不是 "next" 时填 null。

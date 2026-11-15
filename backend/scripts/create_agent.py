@@ -103,7 +103,15 @@ def agent_body(tool_ids: list[str]) -> dict:
             },
             "tts": tts,
             # 轮到谁说话：用户一停就回答；静音时就开始生成（客户端按键说话，结束由客户端决定）
-            "turn": {"turn_eagerness": "eager", "speculative_turn": True},
+            "turn": {
+                "turn_eagerness": "eager",
+                "speculative_turn": True,
+                # 按键说话：平时客户端发的都是静音帧，不能因为安静就追问 "Are you still there?" 或挂断
+                "turn_timeout": -1,  # 不在安静后主动开口
+                "silence_end_call_timeout": -1,  # 安静不挂断
+                "soft_timeout_config": {"timeout_seconds": -1},  # 不说 "Hmm..." 之类的填充语
+            },
+            "conversation": {"max_duration_seconds": 7200},  # 默认 600 秒会在 10 分钟时强制挂断
         },
         "platform_settings": {
             # 允许客户端开会话时覆盖语言（中文）和开场白
@@ -142,7 +150,9 @@ def main():
         turn = cc.get("turn", {})
         print(f"核对：llm={p.get('llm')} reasoning={p.get('reasoning_effort')} tools={len(p.get('tool_ids') or [])} "
               f"tts={cc.get('tts', {}).get('model_id')} voice={cc.get('tts', {}).get('voice_id')} turn_eagerness={turn.get('turn_eagerness')} "
-              f"speculative_turn={turn.get('speculative_turn')}")
+              f"speculative_turn={turn.get('speculative_turn')} turn_timeout={turn.get('turn_timeout')} "
+              f"silence_end_call={turn.get('silence_end_call_timeout')} "
+              f"max_duration={cc.get('conversation', {}).get('max_duration_seconds')}")
     if "--write-env" in sys.argv:
         write_env(agent_id)
     else:

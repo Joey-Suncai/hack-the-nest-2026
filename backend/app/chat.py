@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Literal
 
 from pydantic import BaseModel
@@ -155,10 +156,14 @@ def build_prompt(body: ChatIn) -> str:
     )
 
 
+# chat 的思考量："" = 模型默认；minimal / low / medium / high（评测见 eval_chat.py）
+THINKING = os.getenv("CHAT_THINKING", "low").strip().lower() or None
+
+
 def chat(body: ChatIn) -> ChatOut:
     """真实 Gemini 版：截图 + 对话 + 任务进度 → 回复和 action。结果一定经过 finalize_chat。"""
     from app.steps import decode_screenshot, image_mime
 
     img = decode_screenshot(body.screenshot)
-    raw = gemini.generate_json(build_prompt(body), ChatRaw, files=[(img, image_mime(img))])
+    raw = gemini.generate_json(build_prompt(body), ChatRaw, files=[(img, image_mime(img))], thinking=THINKING)
     return finalize_chat(raw, has_task=body.task is not None, lang=body.lang)
