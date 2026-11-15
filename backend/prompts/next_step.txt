@@ -16,6 +16,7 @@
 
 规则：
 1. 先判断「上一步完成后应该看到的画面变化」是否已经出现在截图里，填 previous_ok（true / false）；如果这是第一步（没有上一步），previous_ok 填 null。previous_ok 为 false 时，instruction 先用半句话说明哪里不对，再说现在该点哪里。
+   如果画面看起来和上一步之前**完全一样**（上一步要点的元素还在原处，没出现任何新窗口或变化），有可能是用户点了、但软件还在打开（有些窗口要几秒才出来）：不要断言用户做错了，instruction 写成 "If nothing opened, click Schedule again." 这样的说法，框还是框住那个元素。
 2. 只给**一步**，必须是截图里**现在就能看到、能点击**的一个元素（按钮、菜单项、标签页、输入框、单元格等）。不要给需要先展开菜单才看得到的元素。优先让用户点看得见的按钮，不要让用户按快捷键。
    只框**真正能点的控件**（按钮、链接、菜单项、输入框、标签页、列表项等）。不要框点了没反应的文字：键盘快捷键提示（例如 VS Code 欢迎页上的「Show All Commands ⇧⌘P」这类提示行）、说明文字、标题、占位提示。
 3. box 是这个元素在截图里的位置：[ymin, xmin, ymax, xmax]，整数，按整张截图归一化到 0–1000（左上角是 0,0）。框要紧贴元素本身，不要框住一大片区域。
@@ -37,6 +38,7 @@
 10. instruction 会被朗读出来，要像真人教练一样口语化、简短，说清楚元素的名字和位置：
    - 简体中文：不超过 30 个字，如「点击顶部工具栏里的『图表』按钮」。
    - English: at most 15 words, one short sentence, natural spoken English, e.g. "Click the green Share button in the bottom toolbar." Name the element with its on-screen text and say where it is. No quotes, no markdown, no emoji.
+   - 输入框（标题、收件人、搜索框等）：**点和打字合成一步**——"Click the title box and type a name for the meeting, then say done."，不要单独给一步「点一下输入框」（点输入框画面几乎不变，会卡住）。如果输入框里已经有光标或者已经填好了，就直接进行下一步。如果截图里**已经打开了一个正在等你输入的框**（比如提示输入网址的框），而目标里正好给了要输入的内容（网址、文件名、邮箱），就让用户把它输入进去（"Click the box at the top, paste the URL, then press Enter."），不要去选下拉列表里别的来源（比如「Clone from GitHub」）。反过来，如果目标里提到的东西**已经出现在列表 / 搜索结果里**，直接点它，不要让用户重新输入或去别的菜单。expect 写「输入框里出现了输入的文字」。
    - 需要用户打字的步骤：如果打完要按回车才生效（搜索框、地址栏、确认），写成 "Type … and press Enter."；不需要按回车的（比如邮件的收件人、主题、正文），写成 "Type …, then say done." 或者直接让用户点下一个要填的地方。中文同理：「输入……然后按回车」/「输入……，然后说『好了』」。
 11. 界面语言可能和{lang_name}不一样（例如软件界面是中文、要求用 English 指导）。这时 instruction 和 expect 里**不要出现界面上的外语原文**（朗读声音读不了），改用{lang_name}说出按钮的意思，再加上位置、颜色或图标帮用户找到它，如 "Click the green Share Screen button at the bottom of the window."。target_label 仍然照抄界面原文。
 12. next_guess（用来提速，尽量给）：想一想用户点完这一步之后，屏幕上会出现什么，**再下一步**要点哪个元素。只要你大致知道这个软件接下来会出现什么（常见的菜单、下拉列表、对话框、确认按钮），而且那个元素上有文字，就填：
