@@ -85,3 +85,9 @@ def test_build_prompt_includes_user_note():
     body = NextStepIn(app="Numbers", goal="做柱状图", screenshot=TINY_PNG_B64, user_note="用户说点错了")
     assert "用户说点错了" in steps.build_prompt(body)
     assert "（无）" in steps.build_prompt(NextStepIn(app="a", goal="g", screenshot=TINY_PNG_B64))
+
+
+def test_build_prompt_includes_frontmost_app():
+    body = NextStepIn(app="Numbers", goal="g", screenshot=TINY_PNG_B64, frontmost_app="Safari")
+    p = steps.build_prompt(body)
+    assert "Safari" in p and "{" not in p

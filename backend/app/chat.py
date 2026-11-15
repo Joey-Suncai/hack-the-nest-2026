@@ -40,6 +40,7 @@ class ChatIn(BaseModel):
     screenshot: str
     messages: list[ChatMessage] = []
     task: TaskState | None = None
+    frontmost_app: str | None = None
 
 
 class ChatOut(BaseModel):
@@ -149,6 +150,7 @@ def build_prompt(body: ChatIn) -> str:
     messages = "\n".join(f"{who[m.role]}：{m.text}" for m in body.messages) or "（无）"
     return gemini.load_prompt(
         "chat", task=_task_text(body.task), messages=messages,
+        frontmost_app=(body.frontmost_app or "").strip() or "（未知）",
         message=body.message.strip(), lang_name=_LANG_NAME[body.lang],
     )
 

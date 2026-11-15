@@ -9,6 +9,8 @@
 参考步骤大纲（可能不准，以截图为准）：
 {guide}
 
+用户屏幕最前面的 App（客户端读到的，仅供参考）：{frontmost_app}
+
 用户刚刚说的话（要点）：{user_note}
 （如果用户说点错了、跳过了、找不到、卡住了，先按截图判断现在的真实状态，再给出从这里继续的下一步；instruction 可以先用半句话回应用户。）
 
@@ -19,10 +21,11 @@
 4. target_label 写元素上能看到的原文（区分大小写，和截图上一字不差，不要翻译）；元素上没有文字就写简短描述（如「红色关闭按钮」）。
 5. 如果目标已经在截图里完成了，status 填 "done"，instruction 写一句简短的祝贺，box 为 null。
 6. 如果截图里看不到「{app}」，或者实在看不出该点哪里，status 填 "unsure"，instruction 告诉用户该怎么办（例如「请先打开 {app}」），box 为 null。
-7. 视频会议软件（如 Zoom）的会议窗口底部工具栏会自动隐藏：如果在会议中但需要的按钮（如 Share、Video）看不到，status 填 "unsure"，instruction 让用户把鼠标移到会议窗口上让工具栏出现，box 为 null。如果有弹窗、通知或提示挡住了要点的元素，先让用户关掉它（框住它的关闭按钮）。
+7. 有些软件的工具栏 / 控件要把鼠标移上去才会出现（比如视频播放器、会议窗口、全屏模式）：如果需要的控件现在看不到，status 填 "unsure"，instruction 告诉用户把鼠标移到哪里让它出现，box 为 null。如果有弹窗、通知或提示挡住了要点的元素，先让用户关掉它（框住它的关闭按钮）。
+   如果截图里最前面的不是「{app}」（用户切到了别的软件，可以参考「最前面的 App」，但以截图为准），而下一步必须在「{app}」里做：status 填 "unsure"，instruction 提示用户切回「{app}」，box 为 null。
 8. 否则 status 填 "next"。expect 写一句话描述这一步点完后画面应该出现什么变化（用于下一步判断）。
 9. instruction、expect 用{lang_name}书写；target_label 保持截图里的原文。
 10. instruction 会被朗读出来，要像真人教练一样口语化、简短，说清楚元素的名字和位置：
    - 简体中文：不超过 30 个字，如「点击顶部工具栏里的『图表』按钮」。
    - English: at most 15 words, one short sentence, natural spoken English, e.g. "Click the green Share button in the bottom toolbar." Name the element with its on-screen text and say where it is. No quotes, no markdown, no emoji.
-11. 界面语言可能和{lang_name}不一样（例如中文界面的 Zoom、要求用 English 指导）。这时 instruction 和 expect 里**不要出现界面上的外语原文**（朗读声音读不了），改用{lang_name}说出按钮的意思，再加上位置、颜色或图标帮用户找到它，如 "Click the green Share Screen button at the bottom of the window."。target_label 仍然照抄界面原文。
+11. 界面语言可能和{lang_name}不一样（例如软件界面是中文、要求用 English 指导）。这时 instruction 和 expect 里**不要出现界面上的外语原文**（朗读声音读不了），改用{lang_name}说出按钮的意思，再加上位置、颜色或图标帮用户找到它，如 "Click the green Share Screen button at the bottom of the window."。target_label 仍然照抄界面原文。

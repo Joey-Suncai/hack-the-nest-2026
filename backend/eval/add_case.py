@@ -34,6 +34,7 @@ def main():
     ap.add_argument("--goal", required=True)
     ap.add_argument("--history", action="append", default=[])
     ap.add_argument("--lang", default="zh")
+    ap.add_argument("--group", default="tuned", help="评测分组：tuned（调过 prompt 的）/ unseen（没见过的软件）")
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--pt", nargs=4, type=int, metavar=("X1", "Y1", "X2", "Y2"))
     g.add_argument("--done", action="store_true", help="这张截图里任务已经完成，期望模型返回 done")
@@ -54,7 +55,7 @@ def main():
     labels_path = CASES / "labels.json"
     labels = json.loads(labels_path.read_text()) if labels_path.exists() else []
     labels = [c for c in labels if c["file"] != file]
-    case = {"file": file, "app": a.app, "goal": a.goal, "lang": a.lang, "history": a.history}
+    case = {"file": file, "app": a.app, "goal": a.goal, "lang": a.lang, "history": a.history, "group": a.group}
     case.update({"target_px": box} if box else {"expect_status": "unsure" if a.unsure else "done"})
     labels.append(case)
     labels_path.write_text(json.dumps(labels, ensure_ascii=False, indent=2) + "\n")

@@ -60,9 +60,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("key", nargs="?", default="", help="只跑文件名包含这个关键字的 case")
     ap.add_argument("--lang", choices=["zh", "en"], help="强制所有 case 用这个语言")
+    ap.add_argument("--group", help="只跑这一组（labels.json 里的 group，没写的算 tuned）")
     a = ap.parse_args()
     cases = [c for c in json.loads((CASES / "labels.json").read_text()) if a.key in c["file"]]
+    if a.group:
+        cases = [c for c in cases if c.get("group", "tuned") == a.group]
     hits, times, ious, cjk_bad = 0, [], [], 0
+    by_group: dict[str, list] = {}
     for c in cases:
         b64, size = to_jpeg_b64(CASES / c["file"])
         want_status = c.get("expect_status")  # "done" / "unsure" / None（要框）
@@ -91,6 +95,7 @@ def main():
             hit = truth[0] <= cy <= truth[2] and truth[1] <= cx <= truth[3]
             score = iou(out.box, truth)
         hits += hit
+        by_group.setdefault(c.get("group", "tuned"), []).append((hit, dt))
         if not want_status:
             ious.append(score)
         detail = err or f"{out.status} box={out.box} label={out.target_label!r}"
@@ -107,6 +112,10 @@ def main():
         print(f"\n[lang={a.lang or '按 case'}] 模型 {gemini.MODEL}（两步定位 {'开' if steps.REFINE else '关'}）：命中率 {hits}/{n} = {hits / n:.0%}，"
               f"平均 IoU {miou:.2f}，平均耗时 {sum(times) / n:.1f}s，最慢 {max(times):.1f}s"
               + (f"，英文指令混入中文 {cjk_bad} 条" if a.lang == "en" or cjk_bad else ""))
+        if len(by_group) > 1 or a.group:
+            for g, rows in sorted(by_group.items()):
+                gh = sum(h for h, _ in rows)
+                print(f"  分组 {g}：命中率 {gh}/{len(rows)} = {gh / len(rows):.0%}，平均耗时 {sum(t for _, t in rows) / len(rows):.1f}s")
 
 
 if __name__ == "__main__":
