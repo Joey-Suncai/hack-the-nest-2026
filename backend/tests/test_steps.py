@@ -79,3 +79,9 @@ def test_finalize_english_fallback():
     out = finalize(NextStepOut(status="next", previous_ok=None, instruction="", target_label=None,
                                box=None, expect=None), "en")
     assert out.status == "unsure" and out.instruction.startswith("I can't tell")
+
+
+def test_build_prompt_includes_user_note():
+    body = NextStepIn(app="Numbers", goal="做柱状图", screenshot=TINY_PNG_B64, user_note="用户说点错了")
+    assert "用户说点错了" in steps.build_prompt(body)
+    assert "（无）" in steps.build_prompt(NextStepIn(app="a", goal="g", screenshot=TINY_PNG_B64))
