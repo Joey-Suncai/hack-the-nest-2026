@@ -697,7 +697,8 @@ class Controller(QObject):
                 if self.task is not None:
                     self._update_steps()
             app = r.get("app")
-            if self.task is not None and isinstance(app, str) and app.strip() and app.strip() != self.task.get("app"):
+            if (self.task is not None and isinstance(app, str) and app.strip() and app.strip() != self.task.get("app")
+                    and app.strip().lower() not in ("showme", "python")):  # 不把 ShowMe 自己当成任务的软件
                 print(f"[app] task app {self.task.get('app')} → {app.strip()}", flush=True)
                 self.task["app"] = app.strip()
             ctx = reasoning.reason_context(r)
