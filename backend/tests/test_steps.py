@@ -184,7 +184,7 @@ def test_next_step_uses_element_and_skips_refine(monkeypatch):
     monkeypatch.setattr(steps, "REFINE", True)
     out = steps.next_step(NextStepIn(app="Chrome", goal="g", screenshot=TINY_PNG_B64, elements=ELEMENTS))
     assert out.element_id == 12 and out.box == [40, 950, 62, 966] and out.target_label == "New Tab"
-    assert calls == [NextStepOut]  # 没有调精修
+    assert calls == [steps.NextStepRaw]  # 没有调精修（主调用用的是编号写成字符串的格式）
 
 
 def test_mock_returns_first_named_element():
@@ -395,3 +395,26 @@ def test_prompt_mentions_check():
     assert "{" not in p
     p = steps.build_prompt(NextStepIn(app="a", goal="g", screenshot=TINY_PNG_B64, elements=ELEMENTS))
     assert "check 的指标控件如果在列表里" in p
+
+
+# ---- 编号写成字符串（整数 element_id 经常停不下来：1583095034…）----
+def test_gemini_schema_asks_for_string_ids():
+    props = steps.NextStepRaw.model_json_schema()["properties"]
+    assert {"type": "string"} in props["element_id"]["anyOf"]
+    check_props = steps.CheckRaw.model_json_schema()["properties"]
+    assert {"type": "string"} in check_props["element_id"]["anyOf"]
+    assert list(steps.NextStepRaw.model_fields) == list(NextStepOut.model_fields)  # 输出顺序不变
+
+
+def test_parse_id_tolerates_common_forms():
+    assert steps.parse_id("135") == 135 and steps.parse_id("#135") == 135 and steps.parse_id("135号") == 135
+    assert steps.parse_id(12) == 12 and steps.parse_id(None) is None and steps.parse_id("Delete") is None
+    assert steps.parse_id("1583095034") is None  # 太长：当成认不出，退回模型自己的框
+
+
+def test_from_raw_converts_ids_back_to_int():
+    raw = steps.NextStepRaw(status="next", previous_ok=None, instruction="Click New Tab", target_label="New Tab",
+                            box=[40, 950, 62, 966], expect=None, element_id="12",
+                            check=steps.CheckRaw(kind="appears", element_id="#3", expect="New Tab"))
+    out = steps.from_raw(raw)
+    assert type(out) is NextStepOut and out.element_id == 12 and out.check.element_id == 3

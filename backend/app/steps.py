@@ -6,6 +6,7 @@ import base64
 import binascii
 import io
 import os
+import re
 import time
 from typing import Literal
 
@@ -104,6 +105,37 @@ class NextStepOut(BaseModel):
     check: Check | None = None  # 这一步做完后应该成立的关键指标；没把握为 null
     next_guess: NextGuess | None = None
     element_id: int | None = None  # 选中的 elements 里的编号；null = 框是 Gemini 自己给的
+
+
+# ---- 给 Gemini 的输出格式：编号写成字符串 ----
+# 实测：整数 element_id 经常停不下来（"element_id": 1583095034…，16 个真实请求里 9 个写满输出上限）。
+# JSON 整数没有结束符号，字符串有引号：让模型写 "135"，后端再转回数字。对客户端的接口不变（还是整数）。
+class CheckRaw(Check):
+    element_id: str | None = None  # 控件编号，写成字符串，如 "12"
+
+
+class NextStepRaw(NextStepOut):
+    check: CheckRaw | None = None
+    element_id: str | None = None  # 控件编号，写成字符串，如 "135"
+
+
+def parse_id(v) -> int | None:
+    """模型写的编号 → 整数。容忍 "135"、"#135"、"135号"、135；认不出 / 太长（> 4 位）→ None（退回模型自己的框）。"""
+    if v is None or isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v if 0 <= v < 10000 else None
+    m = re.search(r"\d+", str(v))
+    return int(m.group()) if m and len(m.group()) <= 4 else None
+
+
+def from_raw(raw: NextStepOut) -> NextStepOut:
+    """Gemini 的回答（编号是字符串）→ 接口用的 NextStepOut（编号是整数）。"""
+    data = raw.model_dump()
+    data["element_id"] = parse_id(data.get("element_id"))
+    if isinstance(data.get("check"), dict):
+        data["check"]["element_id"] = parse_id(data["check"].get("element_id"))
+    return NextStepOut.model_validate(data)
 
 
 def decode_screenshot(b64: str) -> bytes:
@@ -454,7 +486,7 @@ def next_step(body: NextStepIn) -> NextStepOut:
     LAST_THINKING.clear()
     LAST_THINKING.update(level=thinking, reason=why)
     print(f"[next-step] thinking={thinking or 'default'} (reason: {why})")
-    out = gemini.generate_json(prompt, NextStepOut, files=[(img, mime)], thinking=thinking)
+    out = from_raw(gemini.generate_json(prompt, NextStepRaw, files=[(img, mime)], thinking=thinking))
     t2 = time.perf_counter()
     if not body.history:
         out = out.model_copy(update={"previous_ok": None})
