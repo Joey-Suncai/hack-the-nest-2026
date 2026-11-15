@@ -27,6 +27,12 @@ MODEL = os.getenv("GEMINI_MODEL") or DEFAULT_MODEL
 MOCK = os.getenv("GEMINI_MOCK", "0").strip().lower() in ("1", "true", "yes")
 TIMEOUT_S = float(os.getenv("GEMINI_TIMEOUT", "30"))
 RETRIES = 1
+# 对冲请求：第一次请求这么多秒还没回来就再发一次一样的，谁先回来用谁。
+# 日志：大部分 2–3 s，偶尔一次挂满 30 s 才回 504 DEADLINE_EXCEEDED，重试 2.5 s 就好 → 一步卡 32–45 s。0 = 关掉
+HEDGE_AFTER_S = float(os.getenv("GEMINI_HEDGE_AFTER", "6"))
+# 输出上限：防止偶尔「停不下来」一直生成到超时（正常的结构化回答几百个 token）
+MAX_OUTPUT_TOKENS = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "4096"))
+_pool = None
 GROUNDED_TRIES = 3  # generate_grounded 并发几次（见函数说明）
 
 T = TypeVar("T", bound=BaseModel)
@@ -84,27 +90,63 @@ _CLIENT_ERRORS = {
 }
 
 
+def _executor():
+    global _pool
+    if _pool is None:
+        from concurrent.futures import ThreadPoolExecutor
+
+        _pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="gemini")
+    return _pool
+
+
 def _call(prompt: str, files=None, config=None):
+    """调 Gemini。最多发 RETRIES + 1 次：
+    - 第一次很快就失败（5xx、网络）→ 等 1 s 重试
+    - 第一次 HEDGE_AFTER_S 秒还没回来 → 不等它，马上再发一次，两个一起跑，谁先成功用谁（对冲请求）
+    4xx（key 错、参数错）直接报错；429 记下来，别的都失败时报「太频繁」。"""
+    from concurrent.futures import FIRST_COMPLETED, wait
+
     from google.genai import errors
 
     client = _get_client()
-    last: Exception | None = None
-    for attempt in range(RETRIES + 1):
-        try:
-            return client.models.generate_content(
-                model=MODEL, contents=_contents(prompt, files), config=config
-            )
-        except errors.ClientError as e:  # 4xx：key 错、参数错、配额用完，重试没用（429 除外）
-            print(f"[gemini] client error {e.code}: {e}")
-            if e.code == 429:
+
+    def once():
+        return client.models.generate_content(model=MODEL, contents=_contents(prompt, files), config=config)
+
+    pool = _executor()
+    running = [pool.submit(once)]
+    sent, last = 1, None
+    deadline = time.monotonic() + TIMEOUT_S + max(HEDGE_AFTER_S, 1.0) + 2
+    while running:
+        can_hedge = sent <= RETRIES and HEDGE_AFTER_S > 0
+        timeout = HEDGE_AFTER_S if can_hedge else max(0.1, deadline - time.monotonic())
+        done, _ = wait(running, timeout=timeout, return_when=FIRST_COMPLETED)
+        if not done:
+            if can_hedge:
+                print(f"[gemini] 第 {sent} 次请求 {HEDGE_AFTER_S:.0f} s 还没回来 → 再发一次，谁先回来用谁", flush=True)
+                running.append(pool.submit(once))
+                sent += 1
+                continue
+            break  # 都超时了
+        for f in done:
+            running.remove(f)
+            try:
+                resp = f.result()
+                if sent > 1:
+                    print(f"[gemini] 第 {sent} 次请求里有一个成功了", flush=True)
+                return resp
+            except errors.ClientError as e:  # 4xx：key 错、参数错、配额用完，重试没用（429 除外）
+                print(f"[gemini] client error {e.code}: {e}")
+                if e.code != 429:
+                    raise GeminiError(_CLIENT_ERRORS.get(e.code, f"Gemini 请求被拒绝（{e.code}）"), 502)
                 last = GeminiError("Gemini 调用太频繁 / 配额用完了，请稍后再试", 429)
-            else:
-                raise GeminiError(_CLIENT_ERRORS.get(e.code, f"Gemini 请求被拒绝（{e.code}）"), 502)
-        except Exception as e:  # 5xx、超时、网络问题 → 重试一次
-            print(f"[gemini] attempt {attempt + 1} failed: {type(e).__name__}: {e}")
-            last = e
-        if attempt < RETRIES:
+            except Exception as e:  # 5xx、超时、网络问题
+                print(f"[gemini] attempt failed: {type(e).__name__}: {e}")
+                last = e
+        if not running and sent <= RETRIES:  # 失败得很快、还没对冲过：照旧重试一次
             time.sleep(1)
+            running.append(pool.submit(once))
+            sent += 1
     if isinstance(last, GeminiError):
         raise last
     raise GeminiError("AI 服务暂时不可用（超时或网络问题），请稍后再试", 504)
@@ -140,6 +182,7 @@ def generate_json(
         response_mime_type="application/json",
         response_schema=schema,
         thinking_config=types.ThinkingConfig(thinking_level=thinking.upper()) if thinking else None,
+        max_output_tokens=MAX_OUTPUT_TOKENS or None,
     )
     resp = _call(prompt, files, config)
     if isinstance(resp.parsed, schema):
