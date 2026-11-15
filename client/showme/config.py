@@ -47,10 +47,12 @@ STABLE_FRAMES = 1  # 变化后连续几帧不动，才算用户这一步做完�
 HIGHLIGHT_PAD = 12  # 框比目标元素四周大多少（逻辑像素）
 CLICK_EXTRA_PAD = 8  # 判断「点在框里」时，画出来的框四周再放宽多少
 # 这一步做完了（点击 / 画面变化 / 打字）→ 先等画面稳定再截图发给后端：每 SETTLE_POLL_S 截一张缩略图，
-# 先等画面和做之前比变了，再连续 2 张 diff ≤ CHANGE_THRESHOLD 才截；至少等 SETTLE_MIN_S，最多等 SETTLE_MAX_S（视频 / 动画一直动也照截）
+# 先等画面和做之前比变了，再连续 2 张 diff ≤ CHANGE_THRESHOLD 才截；至少等 SETTLE_MIN_S；画面一直没变最多等 SETTLE_NOCHANGE_MAX_S，开始变之后最多再等 SETTLE_MAX_S
 SETTLE_POLL_S = 0.1
 SETTLE_MIN_S = 0.3
-SETTLE_MAX_S = 1.5
+SETTLE_MAX_S = 1.5  # 画面开始变之后最多再等多久（动画 / 视频一直动也照截）
+# 点完 / 打完画面还一点没变：最多等这么久再截（Zoom「安排会议」窗口 >1.5 s 才弹出，太早截到旧画面 Gemini 会让再点一次）
+SETTLE_NOCHANGE_MAX_S = 5.0
 NEAR_CLICK_PT = 40  # 点在框外但离框不超过这么多逻辑点：也算完成（框画偏了；点错了下一步 Gemini 会纠正）
 HIGHLIGHT_COLOR = "#FF2D78"  # 框和光晕的颜色
 BORDER_WIDTH = 4  # 实线边框粗细

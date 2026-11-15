@@ -28,7 +28,7 @@ from PyQt6.QtWidgets import QApplication
 from showme import api, apps, ax_snap, capture, enroll, ocr, sync, wording
 from showme.change import ChangeDetector, _diff, mask_rects
 from showme.config import (CHANGE_THRESHOLD, CLICK_EXTRA_PAD, DEBUG_DETECT, HIGHLIGHT_PAD, LOG, MIC_MAX_S, POLL_S,
-                           NEAR_CLICK_PT, SETTLE_MAX_S, SETTLE_MIN_S, SETTLE_POLL_S, TALK_MAX_S)
+                           NEAR_CLICK_PT, SETTLE_MAX_S, SETTLE_MIN_S, SETTLE_NOCHANGE_MAX_S, SETTLE_POLL_S, TALK_MAX_S)
 from showme.coords import box_to_rect, expand, same_target
 from showme.i18n import t
 from showme.agent import AgentSession, MainThread
@@ -682,14 +682,17 @@ class Controller(QObject):
         # 不管哪种信号，都从新的一帧开始比、至少等 SETTLE_MIN_S（画面变化触发那一帧不能当「稳定」的起点）
         # 先等画面「变了」（和做之前那一帧比），再等它稳定：网页点完要过一会儿才开始变，太早截到的还是旧画面
         self._settle = {"t0": time.monotonic(), "reason": reason, "n": 0, "min": SETTLE_MIN_S, "prev": None,
-                        "base": self._last_raw, "changed": self._last_raw is None or reason == "screen_change"}  # 画面变化触发：已经变了
+                        "base": self._last_raw, "changed": self._last_raw is None or reason == "screen_change",  # 画面变化触发：已经变了
+                        "t_changed": 0.0}
         self.poll.setInterval(int(SETTLE_POLL_S * 1000))
         if not self.poll.isActive():
             self.poll.start()
 
     def _settle_tick(self):
         """每 SETTLE_POLL_S 秒截一张缩略图：连续 2 张基本不变（diff ≤ CHANGE_THRESHOLD）就截正式的图；
-        至少等 SETTLE_MIN_S；最多等 SETTLE_MAX_S（视频 / 动画一直在动也不能卡住）。"""
+        至少等 SETTLE_MIN_S。画面还没变：最多等 SETTLE_NOCHANGE_MAX_S（慢窗口，比如 Zoom 的「安排会议」）；
+        开始变之后：最多再等 SETTLE_MAX_S（视频 / 动画一直在动也不能卡住）。
+        等的时候用户说话 / 按停止 → state 不是 WAITING 或 _wait() 清掉 _settle，这里就不会再被调用。"""
         st = self._settle
         el = time.monotonic() - st["t0"]
         try:
@@ -703,7 +706,8 @@ class Controller(QObject):
         if raw is not None and not st["changed"] and _diff(raw, st["base"]) > CHANGE_THRESHOLD:
             st["changed"] = True
             st["t_changed"] = el
-        if el >= SETTLE_MAX_S or raw is None:
+        cap = st["t_changed"] + SETTLE_MAX_S if st["changed"] else SETTLE_NOCHANGE_MAX_S
+        if el >= cap or raw is None:
             how = ("截图失败" if raw is None else "画面一直没变，到时间了" if not st["changed"] else "一直在动，到时间了")
         elif st["changed"] and d is not None and d <= CHANGE_THRESHOLD and el >= st["min"]:
             how = "稳定了" if st["base"] is None else f"{st.get('t_changed', 0) * 1000:.0f} ms 时开始变，之后稳定了"

@@ -10,8 +10,11 @@ from showme import api
 from showme.config import API_BASE
 from showme.i18n import t
 from showme.controller import Controller
-from showme.overlay import Overlay, apply_macos_window_settings, make_accessory_app, watch_space_changes
+from showme.overlay import (Overlay, apply_macos_window_settings, make_accessory_app, order_front_without_activating,
+                            watch_space_changes)
 from showme.panel import Panel
+
+SPACE_DEBOUNCE_MS = 400  # 切换桌面的通知常常连着来好几次：最后一次之后过这么久才重设一次
 
 
 def check_health(panel: Panel, controller=None, tries_left: int = 5):
@@ -32,20 +35,28 @@ def check_health(panel: Panel, controller=None, tries_left: int = 5):
 
 
 def main():
+    # Qt 在 macOS 上 raise_() / activateWindow() 默认会激活整个进程 → 抢走用户正在用的 App 的焦点。关掉
+    os.environ.setdefault("QT_MAC_SET_RAISE_PROCESS", "0")
     app = QApplication(sys.argv)
     app.setApplicationName("ShowMe")
     make_accessory_app()  # 必须在建窗口之前：框和面板才能出现在别的桌面 / 全屏 App 上
     overlay = Overlay()
     panel = Panel()
 
-    def on_space_changed():
-        print("[overlay] 切换了桌面，重新设置框和面板", flush=True)
+    def reapply_windows():
+        """切换桌面后重设窗口层级 / 所有桌面可见，再不激活地提到最前。
+        绝不能激活 ShowMe 或让面板变成 key window：用户正在用的 App 会失焦（Zoom「安排会议」窗口失焦就自己关了）。"""
+        print("[overlay] 切换了桌面，重新设置框和面板（不抢焦点）", flush=True)
         apply_macos_window_settings(overlay, click_through=True)
         apply_macos_window_settings(panel)
-        overlay.raise_()
-        panel.raise_()
+        order_front_without_activating(overlay)
+        order_front_without_activating(panel)
 
-    watch_space_changes(on_space_changed)
+    space_timer = QTimer()
+    space_timer.setSingleShot(True)
+    space_timer.setInterval(SPACE_DEBOUNCE_MS)
+    space_timer.timeout.connect(reapply_windows)
+    watch_space_changes(space_timer.start)  # 连续的通知只会重启计时器，最后只重设一次
     controller = Controller(panel, overlay)
     app.aboutToQuit.connect(controller.shutdown)
     QTimer.singleShot(300, lambda: check_health(panel, controller))

@@ -244,7 +244,63 @@ def test_settle_no_change_gives_up_at_max(monkeypatch, capsys):
     assert c.fired == []  # 一直没变：不会 0.3 s 就截
     c._settle["t0"] -= ctl.SETTLE_MAX_S
     c._settle_tick()
+    assert c.fired == []  # 1.5 s 了还没变：慢窗口（Zoom「安排会议」）→ 继续等
+    c._settle["t0"] -= ctl.SETTLE_NOCHANGE_MAX_S - ctl.SETTLE_MAX_S
+    c._settle_tick()
     assert c.fired and "画面一直没变，到时间了" in capsys.readouterr().out
+
+
+class FakeClock:
+    def __init__(self): self.t = 1000.0
+    def __call__(self): return self.t
+
+
+def _sim(monkeypatch, frame_at, reason="click", max_s=10.0):
+    """用假时钟按 SETTLE_POLL_S 一帧帧跑：frame_at(t) = t 秒时截到的画面（灰度值）。返回截正式图的时刻（秒）。"""
+    clock = FakeClock()
+    monkeypatch.setattr(ctl.time, "monotonic", clock)
+    t0 = clock.t
+    c = _settler(monkeypatch, [])
+    monkeypatch.setattr(capture, "to_small_gray", lambda img: np.full((64, 64), frame_at(clock.t - t0), np.float32))
+    c._on_screen_changed = lambda: c.fired.append(clock.t - t0)
+    c._last_raw = np.zeros((64, 64), np.float32)  # 点之前的画面
+    c._step_completed(reason)
+    while c._settle is not None and clock.t - t0 < max_s:
+        clock.t += ctl.SETTLE_POLL_S
+        c._settle_tick()
+    return c.fired
+
+
+def test_slow_window_waits_past_old_max_then_captures_after_change(monkeypatch):
+    fired = _sim(monkeypatch, lambda t: 0.0 if t < 3.0 else 0.5)  # 3 秒后窗口才弹出
+    assert len(fired) == 1 and 3.0 < fired[0] <= 3.0 + 0.5  # 变了之后很快截，不是 1.5 s 就截旧画面
+
+
+def test_fast_change_still_captures_fast(monkeypatch):
+    fired = _sim(monkeypatch, lambda t: 0.0 if t < 0.1 else 0.5)  # 普通菜单：马上变
+    assert len(fired) == 1 and ctl.SETTLE_MIN_S <= fired[0] <= 0.6
+
+
+def test_never_changes_gives_up_at_nochange_max(monkeypatch):
+    fired = _sim(monkeypatch, lambda t: 0.0)
+    assert len(fired) == 1 and abs(fired[0] - ctl.SETTLE_NOCHANGE_MAX_S) < 0.15
+
+
+def test_keeps_moving_after_change_capped(monkeypatch):
+    fired = _sim(monkeypatch, lambda t: 0.0 if t < 2.0 else (t * 7.3) % 1.0)  # 2 秒后开始一直动（动画 / 视频）
+    assert len(fired) == 1 and abs(fired[0] - (2.0 + ctl.SETTLE_MAX_S)) < 0.25
+
+
+def test_stop_during_wait_aborts(monkeypatch):
+    c = _settler(monkeypatch, [0.0] * 50)
+    c._last_raw = np.zeros((64, 64), np.float32)
+    c._step_completed("click")
+    c._settle_tick()
+    c.state = ctl.PAUSED  # 用户按停止 / 开始说话
+    c._on_poll = types.MethodType(Controller._on_poll, c)
+    c._settle["t0"] -= ctl.SETTLE_NOCHANGE_MAX_S
+    c._on_poll()
+    assert c.fired == []
 
 
 def test_click_on_ocr_box_before_gemini_confirms(monkeypatch):
