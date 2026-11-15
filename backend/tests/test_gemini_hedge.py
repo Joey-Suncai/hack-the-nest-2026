@@ -22,6 +22,10 @@ class _FakeModels:
             return f"slow{i}"
         if kind == "fail":
             raise RuntimeError("504 DEADLINE_EXCEEDED")
+        if kind == "bad":  # 回了，但写满上限 / 半截 JSON
+            if arg:
+                time.sleep(arg)
+            return "bad"
         return f"fast{i}"
 
 
@@ -60,3 +64,47 @@ def test_both_fail_gives_friendly_504(monkeypatch):
 def test_hedging_off_waits_for_the_single_call(monkeypatch):
     models = _client(monkeypatch, [("sleep", 0.2), ("ok", None)], hedge=0)
     assert gemini._call("p") == "slow0" and models.calls == 1
+
+
+def _parse(resp):
+    if resp == "bad":
+        raise gemini._BadOutput("写满输出上限 MAX_TOKENS")
+    return resp
+
+
+def test_unusable_reply_is_retried_immediately(monkeypatch):
+    # 日志：卡在 "2525…" 写满上限 → 半截 JSON → 以前直接 502「Something went wrong」
+    models = _client(monkeypatch, [("bad", None), ("ok", None)])
+    assert gemini._call("p", parse=_parse) == "fast1" and models.calls == 2
+
+
+def test_unusable_reply_waits_for_the_other_hedged_request(monkeypatch):
+    # 第一个慢、但会成功；对冲的第二个先回来却不能用 → 不报错，接着等第一个
+    models = _client(monkeypatch, [("sleep", 0.3), ("bad", None)], hedge=0.05)
+    assert gemini._call("p", parse=_parse) == "slow0" and models.calls >= 2
+
+
+def test_all_unusable_gives_format_error(monkeypatch):
+    _client(monkeypatch, [("bad", None)])
+    with pytest.raises(gemini.GeminiError) as e:
+        gemini._call("p", parse=_parse)
+    assert e.value.status == 502 and "格式" in e.value.message
+
+
+def test_generate_json_treats_max_tokens_as_unusable(monkeypatch):
+    class R:
+        def __init__(self, finish, text):
+            self.candidates = [type("C", (), {"finish_reason": finish})()]
+            self.text, self.parsed = text, None
+
+    from pydantic import BaseModel
+
+    class Out(BaseModel):
+        a: int
+
+    replies = iter([R("FinishReason.MAX_TOKENS", '{"a": 2525252525'), R("FinishReason.STOP", '{"a": 1}')])
+    monkeypatch.setattr(gemini, "MOCK", False)
+    monkeypatch.setattr(gemini, "HEDGE_AFTER_S", 0)
+    monkeypatch.setattr(gemini, "_get_client", lambda: type("C", (), {"models": type("M", (), {
+        "generate_content": lambda self, model, contents, config: next(replies)})()})())
+    assert gemini.generate_json("p", Out).a == 1
