@@ -21,6 +21,7 @@ MIC_MAX_S = 30  # 最长录多久，到点自动结束
 
 # ---- 调试记录：SHOWME_LOG=1 时，每一步的截图和后端返回存到 client/logs/<时间>/ ----
 LOG = os.getenv("SHOWME_LOG") == "1"
+DEBUG_DETECT = os.getenv("SHOWME_DEBUG_DETECT") == "1"  # 画面变化检测的详细日志（排查「点了检测不到」）
 
 # ---- 后端 ----
 API_BASE = os.getenv("SHOWME_API", "http://localhost:8000")

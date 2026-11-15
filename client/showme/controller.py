@@ -26,7 +26,7 @@ from PyQt6.QtWidgets import QApplication
 
 from showme import api, apps, capture, enroll, ocr, wording
 from showme.change import ChangeDetector, mask_rects
-from showme.config import HIGHLIGHT_PAD, LOG, MIC_MAX_S, POLL_S
+from showme.config import DEBUG_DETECT, HIGHLIGHT_PAD, LOG, MIC_MAX_S, POLL_S
 from showme.coords import box_to_rect, expand, same_target
 from showme.i18n import t
 from showme.agent import AgentSession, MainThread
@@ -55,6 +55,11 @@ class _Job(QRunnable):
         except Exception as e:  # noqa: BLE001  任何意外都不能让客户端崩
             traceback.print_exc()
             self.signals.err.emit(api.ApiError(t("client_error", e=e)))
+
+
+def dbg(*a):
+    if DEBUG_DETECT:
+        print(f"[detect {time.strftime('%H:%M:%S')}]", *a, flush=True)
 
 
 def _msg(e) -> str:
@@ -272,6 +277,7 @@ class Controller(QObject):
             self._wait()
 
     def _on_input_focus(self, focused: bool):
+        dbg(f"_on_input_focus focused={focused} state={self.state} _typing={self._typing} 轮询在跑={self.poll.isActive()}")
         if focused and self.state == WAITING:
             self.poll.stop()
             self._typing = True
@@ -353,6 +359,8 @@ class Controller(QObject):
                 self._jobs.discard(sig)
                 if token is None or token == self._token:
                     handler(v)
+                else:
+                    dbg(f"丢掉一个过期的后台结果（token {token} ≠ 当前 {self._token}），handler={getattr(handler, '__name__', handler)}")
             return f
 
         sig.ok.connect(done(on_ok))
@@ -434,6 +442,7 @@ class Controller(QObject):
             print(f"[speed] 画面变化 → 出框 {(time.perf_counter() - self._t_change) * 1000:.0f} ms（{how}）", flush=True)
 
     def _on_result(self, r: dict, source: str | None = None):
+        dbg(f"_on_result status={r.get('status')} source={source} state={self.state} box={r.get('box')}")
         self._result_source = source
         if self.history and r.get("previous_ok") is False:
             self.history[-1]["ok"] = False
@@ -500,6 +509,8 @@ class Controller(QObject):
         self._masks: list[tuple[int, int, int, int]] = []
         self._t_change = None
         self.poll.start()
+        dbg(f"_wait：开始等画面变化 state={self.state} 基准帧={'用请求截图' if base_img is not None else '下一帧'} "
+            f"轮询在跑={self.poll.isActive()} _typing={self._typing} 来源={getattr(self, '_result_source', None)}")
 
     def _notify(self, text: str, kind: str):
         if getattr(self, "_result_source", None) == "tool" and kind != "ocr":
@@ -527,6 +538,7 @@ class Controller(QObject):
 
     def _on_poll(self):
         if self.state != WAITING:
+            dbg(f"_on_poll：state={self.state}，不检测")
             return
         try:
             raw = capture.to_small_gray(capture.grab())
@@ -540,10 +552,17 @@ class Controller(QObject):
             return
         if grew:  # 遮罩变大了：基准帧用同样的遮罩重算
             self.detector.reset(self._masked(self._base_raw))
-        if self.detector.feed(self._masked(raw)):
+        fired = self.detector.feed(self._masked(raw))
+        if DEBUG_DETECT:
+            area = self._screen_wh[0] * self._screen_wh[1]
+            masked = min(1.0, sum(w * h for _, _, w, h in self._masks) / area)
+            dbg(f"poll diff={self.detector.last_diff:.4f} 阈值={self.detector.threshold} 已变化={self.detector._changed} "
+                f"稳定帧={self.detector._stable} 遮罩≈{masked * 100:.0f}% 遮罩数={len(self._masks)} _typing={self._typing} 触发={fired}")
+        if fired:
             self._on_screen_changed()
 
     def _on_screen_changed(self):
+        dbg(f"_on_screen_changed ✅ 触发：state={self.state} last_instruction={self.last_instruction!r} next_guess={self._guess!r}")
         self._result_source = None
         self._t_change = time.perf_counter()
         if self.last_instruction:

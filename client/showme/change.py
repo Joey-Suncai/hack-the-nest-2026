@@ -22,6 +22,7 @@ class ChangeDetector:
         self._base: np.ndarray | None = None
 
     def reset(self, baseline: np.ndarray) -> None:
+        self.last_diff = 0.0  # 调试用：最近一次和基准帧（或上一帧）的差
         self._base = baseline
         self._prev: np.ndarray | None = None
         self._changed = False
@@ -32,11 +33,13 @@ class ChangeDetector:
         if self._base is None or self._fired:
             return False
         if not self._changed:
-            if _diff(frame, self._base) > self.threshold:
+            self.last_diff = _diff(frame, self._base)
+            if self.last_diff > self.threshold:
                 self._changed = True
                 self._prev = frame
             return False
-        if _diff(frame, self._prev) <= self.threshold:
+        self.last_diff = _diff(frame, self._prev)
+        if self.last_diff <= self.threshold:
             self._stable += 1
         else:
             self._stable = 0
