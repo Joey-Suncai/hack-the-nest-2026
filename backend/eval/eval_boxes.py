@@ -3,11 +3,16 @@
 labels.json：[{"file": "x.png", "app": "...", "goal": "...", "history": ["已做的步骤", ...],
                "target_px": [x1, y1, x2, y2]}]   # 像素坐标，相对原图
   任务已完成的截图：不写 target_px，改写 "expect_status": "done"（模型返回 done 才算命中）
-运行：cd backend && uv run python eval/eval_boxes.py [文件名关键字]
+  需要用户先做点什么的截图（如 Zoom 工具栏自动隐藏）：写 "expect_status": "unsure"
+  可选 "app_en" / "goal_en" / "history_en"：--lang en 时用英文的目标和历史（模拟客户端发英文）
+运行：cd backend && uv run python eval/eval_boxes.py [文件名关键字] [--lang en|zh]
+  --lang 强制所有 case 用这个语言（不写就用每个 case 自己的 lang，默认 zh）
 """
+import argparse
 import base64
 import io
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -19,6 +24,7 @@ from PIL import Image  # noqa: E402
 from app import gemini, steps  # noqa: E402
 
 CASES = Path(__file__).parent / "cases"
+CJK = re.compile(r"[\u3400-\u9fff\u3000-\u303f\uff00-\uffef]")
 
 
 def to_jpeg_b64(path: Path, long_edge: int = 1280) -> tuple[str, tuple[int, int]]:
@@ -51,16 +57,23 @@ def iou(a, b):
 def main():
     if gemini.MOCK:
         sys.exit("GEMINI_MOCK=1 时评测没有意义，用 GEMINI_MOCK=0 运行")
-    key = sys.argv[1] if len(sys.argv) > 1 else ""
-    cases = [c for c in json.loads((CASES / "labels.json").read_text()) if key in c["file"]]
-    hits, times, ious = 0, [], []
+    ap = argparse.ArgumentParser()
+    ap.add_argument("key", nargs="?", default="", help="只跑文件名包含这个关键字的 case")
+    ap.add_argument("--lang", choices=["zh", "en"], help="强制所有 case 用这个语言")
+    a = ap.parse_args()
+    cases = [c for c in json.loads((CASES / "labels.json").read_text()) if a.key in c["file"]]
+    hits, times, ious, cjk_bad = 0, [], [], 0
     for c in cases:
         b64, size = to_jpeg_b64(CASES / c["file"])
-        want_done = c.get("expect_status") == "done"
-        truth = None if want_done else px_to_norm(c["target_px"], size)
+        want_status = c.get("expect_status")  # "done" / "unsure" / None（要框）
+        truth = None if want_status else px_to_norm(c["target_px"], size)
+        lang = a.lang or c.get("lang", "zh")
+        app, goal, history = c["app"], c["goal"], c.get("history", [])
+        if lang == "en":
+            app, goal, history = c.get("app_en", app), c.get("goal_en", goal), c.get("history_en", history)
         body = steps.NextStepIn(
-            app=c["app"], goal=c["goal"], lang=c.get("lang", "zh"), screenshot=b64,
-            history=[steps.HistoryItem(instruction=h, ok=True) for h in c.get("history", [])],
+            app=app, goal=goal, lang=lang, screenshot=b64,
+            history=[steps.HistoryItem(instruction=h, ok=True) for h in history],
         )
         t0 = time.perf_counter()
         try:
@@ -71,22 +84,29 @@ def main():
         dt = time.perf_counter() - t0
         times.append(dt)
         hit, score = False, 0.0
-        if want_done:
-            hit = bool(out) and out.status == "done"
+        if want_status:
+            hit = bool(out) and out.status == want_status
         elif out and out.box:
             cy, cx = (out.box[0] + out.box[2]) / 2, (out.box[1] + out.box[3]) / 2
             hit = truth[0] <= cy <= truth[2] and truth[1] <= cx <= truth[3]
             score = iou(out.box, truth)
         hits += hit
-        if not want_done:
+        if not want_status:
             ious.append(score)
-        detail = err or f"{out.status} box={out.box} label={out.target_label!r} 「{out.instruction}」"
+        detail = err or f"{out.status} box={out.box} label={out.target_label!r}"
         print(f"{'✅' if hit else '❌'} {c['file']:<32} IoU={score:.2f} {dt:5.1f}s  {detail}")
+        if out:
+            words = len(out.instruction.split()) if lang == "en" else len(out.instruction)
+            unit = "words" if lang == "en" else "字"
+            mixed = lang == "en" and bool(CJK.search(out.instruction))
+            cjk_bad += mixed
+            print(f"     → 「{out.instruction}」（{words} {unit}）{'  ⚠️ 英文指令里有中文，声音读不了' if mixed else ''}")
     n = len(cases)
     if n:
         miou = sum(ious) / len(ious) if ious else 0
-        print(f"\n模型 {gemini.MODEL}（两步定位 {'开' if steps.REFINE else '关'}）：命中率 {hits}/{n} = {hits / n:.0%}，"
-              f"平均 IoU {miou:.2f}，平均耗时 {sum(times) / n:.1f}s，最慢 {max(times):.1f}s")
+        print(f"\n[lang={a.lang or '按 case'}] 模型 {gemini.MODEL}（两步定位 {'开' if steps.REFINE else '关'}）：命中率 {hits}/{n} = {hits / n:.0%}，"
+              f"平均 IoU {miou:.2f}，平均耗时 {sum(times) / n:.1f}s，最慢 {max(times):.1f}s"
+              + (f"，英文指令混入中文 {cjk_bad} 条" if a.lang == "en" or cjk_bad else ""))
 
 
 if __name__ == "__main__":

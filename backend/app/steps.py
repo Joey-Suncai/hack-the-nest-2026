@@ -66,7 +66,13 @@ def normalize_box(box: list | None) -> list[int] | None:
     return [ymin, xmin, ymax, xmax]
 
 
-def finalize(out: NextStepOut) -> NextStepOut:
+_FALLBACK = {
+    "zh": ("看不出下一步该点哪里，请确认软件窗口在最前面再试一次", "下一步"),
+    "en": ("I can't tell what to click next. Bring the app window to the front and try again.", "Next step."),
+}
+
+
+def finalize(out: NextStepOut, lang: str = "zh") -> NextStepOut:
     """保证传给客户端的数据合法：next 一定有有效框，done / unsure 一定没有框。"""
     box = normalize_box(out.box)
     status = out.status
@@ -74,9 +80,8 @@ def finalize(out: NextStepOut) -> NextStepOut:
         status = "unsure"
     if status != "next":
         box = None
-    instruction = (out.instruction or "").strip() or (
-        "看不出下一步该点哪里，请确认软件窗口在最前面再试一次" if status == "unsure" else "下一步"
-    )
+    unsure_msg, next_msg = _FALLBACK.get(lang, _FALLBACK["zh"])
+    instruction = (out.instruction or "").strip() or (unsure_msg if status == "unsure" else next_msg)
     return out.model_copy(update={"status": status, "box": box, "instruction": instruction})
 
 
@@ -209,5 +214,5 @@ def next_step(body: NextStepIn) -> NextStepOut:
     out = gemini.generate_json(build_prompt(body), NextStepOut, files=[(img, image_mime(img))])
     if not body.history:
         out = out.model_copy(update={"previous_ok": None})
-    out = finalize(out)
-    return finalize(refine_box(img, out))
+    out = finalize(out, body.lang)
+    return finalize(refine_box(img, out), body.lang)

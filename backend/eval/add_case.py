@@ -37,6 +37,7 @@ def main():
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--pt", nargs=4, type=int, metavar=("X1", "Y1", "X2", "Y2"))
     g.add_argument("--done", action="store_true", help="这张截图里任务已经完成，期望模型返回 done")
+    g.add_argument("--unsure", action="store_true", help="要用户先做点什么（如 Zoom 工具栏隐藏），期望模型返回 unsure")
     ap.add_argument("--no-open", action="store_true", help="不打开预览图")
     a = ap.parse_args()
 
@@ -54,7 +55,7 @@ def main():
     labels = json.loads(labels_path.read_text()) if labels_path.exists() else []
     labels = [c for c in labels if c["file"] != file]
     case = {"file": file, "app": a.app, "goal": a.goal, "lang": a.lang, "history": a.history}
-    case.update({"target_px": box} if box else {"expect_status": "done"})
+    case.update({"target_px": box} if box else {"expect_status": "unsure" if a.unsure else "done"})
     labels.append(case)
     labels_path.write_text(json.dumps(labels, ensure_ascii=False, indent=2) + "\n")
 
