@@ -159,3 +159,12 @@ def test_enroll_retries_silent_clip_and_gives_up():
     assert retries == [1] and len(levels) == 3 and min(levels) > -40
     with pytest.raises(NoVoiceError):
         enroll(lambda s: quiet, lambda a: np.array([1.0, 0.0]), on_prompt=lambda *a: None, clip_s=1)
+
+
+def test_enroll_rejects_background_only_in_noisy_room():
+    """吵的地方：背景 -27 dBFS，没开口的录音也有 -27 → 要求比背景响 8 dB 时会被拦下。"""
+    from showme.enroll import NoVoiceError, enroll
+
+    background = np.full(16000, 10 ** (-27 / 20), np.float32)
+    with pytest.raises(NoVoiceError):
+        enroll(lambda s: background, lambda a: np.array([1.0, 0.0]), on_prompt=lambda *a: None, clip_s=1, min_level_db=-19)

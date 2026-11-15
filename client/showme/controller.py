@@ -768,7 +768,10 @@ class Controller(QObject):
             from showme.audio_engine import record_clip
             from showme.voice_filter import SpeakerModel
 
-            vp, levels = enroll.enroll(record_clip, SpeakerModel().embed, prompt, on_retry=retry)
+            ambient = enroll.level_db(record_clip(1.5))  # 先听背景：吵的地方不开口也有 -27 dBFS
+            min_level = max(enroll.MIN_LEVEL_DB, ambient + enroll.ABOVE_AMBIENT_DB)
+            print(f"[voice] 录声纹：背景 {ambient:.1f} dBFS，要求至少 {min_level:.1f}", flush=True)
+            vp, levels = enroll.enroll(record_clip, SpeakerModel().embed, prompt, on_retry=retry, min_level_db=min_level)
             return enroll.save_named(name, vp), levels
 
         def ok(res):

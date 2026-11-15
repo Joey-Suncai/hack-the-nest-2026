@@ -53,7 +53,11 @@ class NoVoiceError(RuntimeError):
     pass
 
 
-def enroll(record, embed, on_prompt=print, sentences=SENTENCES, clip_s=CLIP_S, on_retry=None):
+ABOVE_AMBIENT_DB = 8.0  # 录到的声音要比背景至少响这么多，才算有人在说话（吵的地方背景本身就有 -27 dBFS）
+
+
+def enroll(record, embed, on_prompt=print, sentences=SENTENCES, clip_s=CLIP_S, on_retry=None,
+           min_level_db: float = MIN_LEVEL_DB):
     """record(seconds) → 声音；embed(声音) → 声纹。返回 (平均声纹, 每段音量 dB 列表)。
 
     每段录完先看音量：太小就让用户再念一次（最多 MAX_RETRY 次），避免把一段空录音混进声纹。
@@ -64,7 +68,7 @@ def enroll(record, embed, on_prompt=print, sentences=SENTENCES, clip_s=CLIP_S, o
             on_prompt(i, len(sentences), s)
             clip = record(clip_s)
             lvl = level_db(clip)
-            if lvl >= MIN_LEVEL_DB:
+            if lvl >= min_level_db:
                 break
             if on_retry:
                 on_retry(i, lvl)
@@ -98,12 +102,18 @@ def main():
         subprocess.run(["afplay", "/System/Library/Sounds/Tink.aiff"])
         time.sleep(0.2)
 
+    # 先听 1.5 秒背景：吵的地方不开口也有 -27 dBFS，只看绝对音量会把背景声录成声纹
+    print("先安静 2 秒，测一下背景声音……", flush=True)
+    ambient = level_db(record_clip(1.5))
+    min_level = max(MIN_LEVEL_DB, ambient + ABOVE_AMBIENT_DB)
+    print(f"背景 {ambient:.1f} dBFS → 念的时候要比背景响，至少 {min_level:.1f} dBFS", flush=True)
+
     def retry(i, lvl):
         print(f"    ⚠️ 没听到你说话（{lvl:.1f} dBFS），请再念一次第 {i} 句", flush=True)
         subprocess.run(["say", "I didn't hear you. Please read it again."])
 
     try:
-        vp, levels = enroll(record_clip, model.embed, prompt, on_retry=retry)
+        vp, levels = enroll(record_clip, model.embed, prompt, on_retry=retry, min_level_db=min_level)
     except NoVoiceError as e:
         print(f"\n❌ {e}。声纹没有保存，原来的不变。", flush=True)
         return 1
