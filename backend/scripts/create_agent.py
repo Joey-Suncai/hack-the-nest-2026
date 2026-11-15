@@ -3,7 +3,7 @@
 运行：cd backend && uv run python scripts/create_agent.py [--write-env]
 - 两个 client tool（show_next_step、look_at_screen）按名字查找，存在就更新，不存在就创建
 - .env 里有 ELEVENLABS_AGENT_ID 就更新这个 agent，没有就新建；--write-env 把新 agent id 写进 .env
-- 系统提示：backend/prompts/agent.txt；LLM：AGENT_LLM（默认 gemini-3.6-flash）；声音：ELEVENLABS_VOICE_ID
+- 系统提示：backend/prompts/agent.txt；LLM：AGENT_LLM（默认 gemini-3.1-flash-lite）、思考 AGENT_REASONING（默认 minimal）；声音：ELEVENLABS_VOICE_ID
 """
 
 import os
@@ -84,7 +84,8 @@ def agent_body(tool_ids: list[str]) -> dict:
     tts = {"model_id": os.getenv("AGENT_TTS_MODEL", "eleven_flash_v2")}
     if os.getenv("ELEVENLABS_VOICE_ID", "").strip():
         tts["voice_id"] = os.getenv("ELEVENLABS_VOICE_ID").strip()
-    return {
+    reasoning = os.getenv("AGENT_REASONING", "minimal").strip()  # flash-lite 不支持 none；空 = 模型默认
+    body = {
         "name": "ShowMe",
         "conversation_config": {
             "agent": {
@@ -92,18 +93,24 @@ def agent_body(tool_ids: list[str]) -> dict:
                 "language": "en",
                 "prompt": {
                     "prompt": prompt,
-                    "llm": os.getenv("AGENT_LLM", "gemini-3.6-flash"),
+                    # 提速：最快的 flash-lite、关掉思考（bench_agent.py 实测对比见 PR）
+                    "llm": os.getenv("AGENT_LLM", "gemini-3.1-flash-lite"),
                     "temperature": 0.3,
                     "tool_ids": tool_ids,
                 },
             },
             "tts": tts,
+            # 轮到谁说话：用户一停就回答；静音时就开始生成（客户端按键说话，结束由客户端决定）
+            "turn": {"turn_eagerness": "eager", "speculative_turn": True},
         },
         "platform_settings": {
             # 允许客户端开会话时覆盖语言（中文）和开场白
             "overrides": {"conversation_config_override": {"agent": {"language": True, "first_message": True}}},
         },
     }
+    if reasoning:
+        body["conversation_config"]["agent"]["prompt"]["reasoning_effort"] = reasoning
+    return body
 
 
 def write_env(agent_id: str):
@@ -130,7 +137,10 @@ def main():
         a = check(client.get(f"{API}/agents/{agent_id}"))
         cc = a.get("conversation_config", {})
         p = cc.get("agent", {}).get("prompt", {})
-        print(f"核对：llm={p.get('llm')} tools={len(p.get('tool_ids') or [])} tts={cc.get('tts', {}).get('model_id')}")
+        turn = cc.get("turn", {})
+        print(f"核对：llm={p.get('llm')} reasoning={p.get('reasoning_effort')} tools={len(p.get('tool_ids') or [])} "
+              f"tts={cc.get('tts', {}).get('model_id')} turn_eagerness={turn.get('turn_eagerness')} "
+              f"speculative_turn={turn.get('speculative_turn')}")
     if "--write-env" in sys.argv:
         write_env(agent_id)
     else:
