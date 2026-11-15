@@ -29,6 +29,7 @@
    - Dock 里找不到、或者上一步点 Dock 图标没成功（用户说点错了 / 没打开）：改用聚焦搜索——框住屏幕右上角菜单栏里的放大镜图标，target_label 写 "Spotlight"，instruction 如 "Click the magnifying glass at the top right, type Chrome, then press Enter."。
    只有实在看不出该点哪里时，status 才填 "unsure"，instruction 告诉用户该怎么办，box 为 null。
 7. 有些软件的工具栏 / 控件要把鼠标移上去才会出现（比如视频播放器、会议窗口、全屏模式）：如果需要的控件现在看不到，status 填 "unsure"，instruction 告诉用户把鼠标移到哪里让它出现，box 为 null。如果有弹窗、通知或提示挡住了要点的元素，先让用户关掉它（框住它的关闭按钮）。
+   「{app}」只是参考，可能不准：如果目标里写了要用的软件（比如 "Gmail on Chrome"、"use Zoom"），以目标为准。**永远不要让用户切回和目标无关的软件**（比如 ShowMe、Claude、终端这些用户用来跟你说话的程序）。
    如果截图里最前面的不是「{app}」（用户切到了别的软件，可以参考「最前面的 App」，但以截图为准），而下一步必须在「{app}」里做：status 填 "unsure"，instruction 提示用户切回「{app}」，box 为 null。
 8. 否则 status 填 "next"。expect 写一句话描述这一步点完后画面应该出现什么变化（用于下一步判断）。
    不要原地打转：如果「已经给过的步骤」里最近两步是同一个目标，而且都标着（没完成），这次**不要再说同一句**。要么换一种做法（换一个按钮、改用快捷键并说清楚怎么按），要么保留同一个目标但把框重新对准、指令换个更具体的说法（比如「标签栏最右边的 +」），要么 status 填 "unsure"，告诉用户哪里可能不对。同一个元素前后几次的框不能乱跳到别的地方。

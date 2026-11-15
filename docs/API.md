@@ -149,7 +149,7 @@
 - `/api/speak` 和 Agent 用同一个声音（`ELEVENLABS_VOICE_ID`，没设时两边都用预置的 Rachel）、同一档模型（英文 `eleven_flash_v2`），听起来是同一个人
 
 ### Agent 的两个 client tool（在客户端执行，结果以字符串返回给 Agent）
-- `show_next_step(goal: string, note?: string)`：客户端截图（先隐藏高亮层）→ 调 `/api/next-step`（`app` 用当前任务的软件或 `frontmost_app`，`goal` = 参数 goal，`user_note` = 参数 note，`history` / `expect` 照常带）→ 画框 + 调 `/api/speak` 念 `instruction` → 返回给 Agent 的字符串（**前缀必须一字不差**）：
+- `show_next_step(goal: string, note?: string, app?: string)`：`app` 是 Agent 判断的任务软件（如 `"Google Chrome"`），客户端开始新任务时用它当 `/api/next-step` 的 `app`；没有就传通用的「当前软件」，**不要用 frontmost_app 当任务软件**（用户可能正在别的窗口里跟 ShowMe 说话）。客户端截图（先隐藏高亮层）→ 调 `/api/next-step`（`app` 用当前任务的软件或 `frontmost_app`，`goal` = 参数 goal，`user_note` = 参数 note，`history` / `expect` 照常带）→ 画框 + 调 `/api/speak` 念 `instruction` → 返回给 Agent 的字符串（**前缀必须一字不差**）：
 
 | 情况 | 返回给 Agent | Agent 会怎么做 |
 |---|---|---|
