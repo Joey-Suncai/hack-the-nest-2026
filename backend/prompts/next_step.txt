@@ -24,7 +24,8 @@
    - 网格（日历、表格、月历）和一排相似的图标：画框前先核对——这一格的行和列（比如日期上方的星期、所在的那一行）、或者图标的形状，确实就是 instruction 里说的那个，**不要差一行 / 一列 / 一个图标**。框的中心必须落在那个元素本身上。核对不了、没把握时 status 填 "unsure"，不要猜相邻的那个。
    - 只框截图里**真的看得到**的元素；不要框不在截图里的菜单栏、按钮。
 4. target_label 写元素上能看到的原文（区分大小写，和截图上一字不差，不要翻译）；元素上没有文字就写简短描述（如「红色关闭按钮」）。
-5. 如果目标已经在截图里完成了，status 填 "done"，instruction 写一句简短的祝贺，box 为 null。
+5. 如果目标已经在截图里完成了，status 填 "done"，instruction 写一句简短的祝贺，box 为 null。先看一眼：目标要的结果是不是**已经出现**在屏幕上了（比如目标是「新建一个演示文稿」，而截图里已经开着一个新的空白演示文稿；目标是「打开 Zoom」，而 Zoom 窗口已经在前面）——是的话直接 done，不要再绕去菜单里重新做一遍。
+   如果画面**还在加载**（有转圈 / 进度条、窗口是空白的只有「取消」按钮、显示「连接中」「Loading」），说明上一步已经生效、软件还在打开：status 填 "unsure"，instruction 写 "Please wait a moment, it's still loading."，box 为 null。不要框别的按钮，也不要框「连接中」这类不能点的文字（客户端会在画面变化后自动再看一次）。
 6. 如果「{app}」还没打开、截图里看不到它的窗口：下一步就是**教用户打开它**，status 填 "next"：
    - 屏幕底部（或侧边）的程序坞（Dock）里有它的图标：框住那个图标，target_label 写这个 App 的名字（如 "Google Chrome"、"Zoom"，客户端会按名字在 Dock 里精确定位），instruction 如 "Click the Google Chrome icon in the Dock at the bottom of the screen."。
    - Dock 里找不到、或者上一步点 Dock 图标没成功（用户说点错了 / 没打开）：改用聚焦搜索——框住屏幕右上角菜单栏里的放大镜图标，target_label 写 "Spotlight"，instruction 如 "Click the magnifying glass at the top right, type Chrome, then press Enter."。
