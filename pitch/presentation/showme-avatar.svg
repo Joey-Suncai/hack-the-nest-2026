@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>ShowMe agent avatar</title>
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="42%" r="70%">
+      <stop offset="0" stop-color="#2a0f22"/>
+      <stop offset="0.55" stop-color="#140912"/>
+      <stop offset="1" stop-color="#08070b"/>
+    </radialGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="10" result="b1"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="3.5" result="b2"/>
+      <feMerge><feMergeNode in="b1"/><feMergeNode in="b2"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="haze" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="28"/>
+    </filter>
+    <clipPath id="round"><rect width="512" height="512" rx="120"/></clipPath>
+  </defs>
+
+  <g clip-path="url(#round)">
+    <rect width="512" height="512" fill="url(#bg)"/>
+    <!-- faint dot grid -->
+    <g fill="#ff2e9a" opacity="0.10">
+      <circle cx="64" cy="64" r="3"/><circle cx="128" cy="64" r="3"/><circle cx="192" cy="64" r="3"/><circle cx="256" cy="64" r="3"/><circle cx="320" cy="64" r="3"/><circle cx="384" cy="64" r="3"/><circle cx="448" cy="64" r="3"/>
+      <circle cx="64" cy="448" r="3"/><circle cx="128" cy="448" r="3"/><circle cx="192" cy="448" r="3"/><circle cx="256" cy="448" r="3"/><circle cx="320" cy="448" r="3"/><circle cx="384" cy="448" r="3"/><circle cx="448" cy="448" r="3"/>
+      <circle cx="64" cy="128" r="3"/><circle cx="64" cy="192" r="3"/><circle cx="64" cy="256" r="3"/><circle cx="64" cy="320" r="3"/><circle cx="64" cy="384" r="3"/>
+      <circle cx="448" cy="128" r="3"/><circle cx="448" cy="192" r="3"/><circle cx="448" cy="256" r="3"/><circle cx="448" cy="320" r="3"/><circle cx="448" cy="384" r="3"/>
+    </g>
+    <!-- ambient pink haze behind the face -->
+    <rect x="126" y="136" width="260" height="220" rx="70" fill="#ff2e9a" opacity="0.35" filter="url(#haze)"/>
+  </g>
+
+  <!-- the highlight frame = the agent's head -->
+  <g filter="url(#glow)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="118" y="132" width="276" height="228" rx="58" stroke="#ff2e9a" stroke-width="16"/>
+    <rect x="118" y="132" width="276" height="228" rx="58" stroke="#ffd6ee" stroke-width="5"/>
+  </g>
+
+  <!-- eyes -->
+  <g filter="url(#glow)">
+    <rect x="186" y="200" width="34" height="64" rx="17" fill="#ff2e9a"/>
+    <rect x="292" y="200" width="34" height="64" rx="17" fill="#ff2e9a"/>
+    <rect x="195" y="210" width="16" height="44" rx="8" fill="#ffe3f3"/>
+    <rect x="301" y="210" width="16" height="44" rx="8" fill="#ffe3f3"/>
+  </g>
+
+  <!-- smile -->
+  <g filter="url(#glow)" fill="none" stroke-linecap="round">
+    <path d="M222 300 Q256 324 290 300" stroke="#ff2e9a" stroke-width="12"/>
+    <path d="M222 300 Q256 324 290 300" stroke="#ffd6ee" stroke-width="4"/>
+  </g>
+
+  <!-- antenna spark -->
+  <g filter="url(#glow)" stroke-linecap="round">
+    <line x1="256" y1="132" x2="256" y2="96" stroke="#ff2e9a" stroke-width="10"/>
+    <circle cx="256" cy="84" r="13" fill="#ffd6ee" stroke="#ff2e9a" stroke-width="6"/>
+  </g>
+
+  <!-- pointer cursor tapping the frame: "show me" -->
+  <g transform="translate(356 318) rotate(-12)" filter="url(#glow)">
+    <path d="M0 0 L0 92 L24 70 L40 106 L58 98 L42 63 L74 62 Z"
+          fill="#120a10" stroke="#ff2e9a" stroke-width="9" stroke-linejoin="round"/>
+    <path d="M0 0 L0 92 L24 70 L40 106 L58 98 L42 63 L74 62 Z"
+          fill="none" stroke="#ffd6ee" stroke-width="3" stroke-linejoin="round"/>
+  </g>
+  <!-- click ripples -->
+  <g fill="none" stroke="#ff2e9a" stroke-linecap="round" filter="url(#glow)" opacity="0.9">
+    <path d="M338 300 l-16 -16" stroke-width="7"/>
+    <path d="M356 292 l0 -22" stroke-width="7"/>
+    <path d="M330 318 l-22 0" stroke-width="7"/>
+  </g>
+</svg>
