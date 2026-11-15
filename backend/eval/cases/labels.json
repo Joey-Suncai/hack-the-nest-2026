@@ -3,8 +3,12 @@
     "file": "synth_numbers_chart.png",
     "app": "Numbers",
     "goal": "把 A1:B6 的数据做成柱状图",
+    "goal_en": "Make a column chart from the data in A1:B6",
     "history": [
       "选中 A1:B6"
+    ],
+    "history_en": [
+      "Select A1:B6"
     ],
     "target_px": [
       688,
@@ -18,7 +22,9 @@
     "file": "synth_settings_dark.png",
     "app": "System Settings",
     "goal": "打开深色模式",
+    "goal_en": "Turn on Dark Mode",
     "history": [],
+    "history_en": [],
     "target_px": [
       270,
       374,
@@ -30,9 +36,12 @@
   {
     "file": "settings_1.jpg",
     "app": "系统设置",
+    "app_en": "System Settings",
     "goal": "把系统外观切换成浅色模式",
+    "goal_en": "Switch the system appearance to Light Mode",
     "lang": "zh",
     "history": [],
+    "history_en": [],
     "target_px": [
       240,
       552,
@@ -43,10 +52,15 @@
   {
     "file": "settings_2.jpg",
     "app": "系统设置",
+    "app_en": "System Settings",
     "goal": "打开深色模式",
+    "goal_en": "Turn on Dark Mode",
     "lang": "zh",
     "history": [
       "点击侧边栏的「外观」"
+    ],
+    "history_en": [
+      "Click Appearance in the sidebar"
     ],
     "target_px": [
       845,
@@ -58,11 +72,17 @@
   {
     "file": "settings_3.jpg",
     "app": "系统设置",
+    "app_en": "System Settings",
     "goal": "打开深色模式",
+    "goal_en": "Turn on Dark Mode",
     "lang": "zh",
     "history": [
       "点击侧边栏的「外观」",
       "点击「深色」"
+    ],
+    "history_en": [
+      "Click Appearance in the sidebar",
+      "Click Dark"
     ],
     "expect_status": "done"
   },
@@ -70,8 +90,10 @@
     "file": "numbers_1.jpg",
     "app": "Numbers",
     "goal": "把 A1:B6 的数据做成柱状图",
+    "goal_en": "Make a column chart from the data in A1:B6",
     "lang": "zh",
     "history": [],
+    "history_en": [],
     "target_px": [
       37,
       189,
@@ -83,9 +105,13 @@
     "file": "numbers_2.jpg",
     "app": "Numbers",
     "goal": "把 A1:B6 的数据做成柱状图",
+    "goal_en": "Make a column chart from the data in A1:B6",
     "lang": "zh",
     "history": [
       "选中 A1:B6"
+    ],
+    "history_en": [
+      "Select A1:B6"
     ],
     "target_px": [
       705,
@@ -98,10 +124,15 @@
     "file": "numbers_3.jpg",
     "app": "Numbers",
     "goal": "把 A1:B6 的数据做成柱状图",
+    "goal_en": "Make a column chart from the data in A1:B6",
     "lang": "zh",
     "history": [
       "选中 A1:B6",
       "点击工具栏的「图表」"
+    ],
+    "history_en": [
+      "Select A1:B6",
+      "Click Chart in the toolbar"
     ],
     "target_px": [
       634,
@@ -114,8 +145,10 @@
     "file": "ppt_1.jpg",
     "app": "PowerPoint",
     "goal": "新加一页带标题的幻灯片，并输入标题",
+    "goal_en": "Add a new slide with a title and type the title",
     "lang": "zh",
     "history": [],
+    "history_en": [],
     "target_px": [
       117,
       108,
@@ -127,9 +160,13 @@
     "file": "ppt_2.jpg",
     "app": "PowerPoint",
     "goal": "新加一页带标题的幻灯片，并输入标题",
+    "goal_en": "Add a new slide with a title and type the title",
     "lang": "zh",
     "history": [
       "点击「新建幻灯片」"
+    ],
+    "history_en": [
+      "Click New Slide"
     ],
     "target_px": [
       120,
@@ -142,10 +179,15 @@
     "file": "ppt_3.jpg",
     "app": "PowerPoint",
     "goal": "新加一页带标题的幻灯片，并输入标题",
+    "goal_en": "Add a new slide with a title and type the title",
     "lang": "zh",
     "history": [
       "点击「新建幻灯片」",
       "选择「标题和内容」版式"
+    ],
+    "history_en": [
+      "Click New Slide",
+      "Choose the Title and Content layout"
     ],
     "target_px": [
       338,
