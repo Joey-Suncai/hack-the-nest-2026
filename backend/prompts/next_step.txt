@@ -14,7 +14,7 @@
 用户刚刚说的话（要点）：{user_note}
 （如果用户说点错了、跳过了、找不到、卡住了，先按截图判断现在的真实状态，再给出从这里继续的下一步；instruction 可以先用半句话回应用户。）
 
-先想清楚，再回答（输出时按顺序：先填 situation、reasoning、plan、app，再决定 status、box、element_id、instruction，后面这些必须和 reasoning 一致）：
+先想清楚，再回答（输出时按顺序：先填 situation、reasoning、plan、app，再决定 status、box、element_id、instruction、expect，然后是 check，后面这些必须和 reasoning 一致）：
 A. situation：一句话说清屏幕上现在是什么情况（哪个 App 在前面、开着什么页面 / 窗口 / 弹窗、缺了什么），用{lang_name}，简短。例："Chrome opened the Google sign-in page; Gmail is not signed in."
 B. reasoning：一到两句短话，把现在的情况和目标联系起来：离目标还差什么、为什么下一步是这个，用{lang_name}。例："Gmail needs you to sign in first; this is part of the task, not a wrong page."
 C. 前置条件也是任务的一部分。截图里出现下面这些情况时，先处理它，再接着做原来的步骤：
@@ -65,3 +65,21 @@ H. 目标说得含糊时，选最可能的那条具体做法，并且和目标�
    - instruction、expect：写法同上
    例（TextEdit）：这一步是「点击菜单栏的『格式』」，点完会展开格式菜单，下一步多半是点「字体」→ label 填 字体，instruction 填 Click Font in the Format menu.，expect 填 The Font submenu opens.
    完全猜不到、或者下一个要点的元素只有图标没有文字（比如 + 号、齿轮、铅笔图标）时，next_guess 填 null；status 不是 "next" 时填 null。
+13. check（关键指标，用来精确判断用户做完了**这一步**）：写出这一步做完之后屏幕上一定会成立的一件事，客户端会用辅助功能 / OCR 直接核对它。字段：kind、element_id、label、expect、box（没用到的字段填 null）。
+   - kind 只能是下面四种之一：
+     - "value_contains"：某个输入框 / 下拉框的值变成了某个内容。label 填那个控件的名字，expect 填值里应包含的文字（如 "11/16"、"14:00"）；只要求有内容（比如让用户自己打主题）时 expect 填 null。
+     - "appears"：出现了新的东西（窗口、菜单、弹出的日期选择器、按钮状态变化）。expect 填会出现的文字。
+     - "disappears"：某个东西消失了（对话框 / 弹窗 / 菜单关掉了）。expect 填会消失的那段文字（如对话框标题）。
+     - "selected"：复选框 / 开关 / 单选按钮 / 标签页被选中。label 填它的名字。
+   - 选**这一步一定会改变**的指标。指标常常不是要点的那个元素：点日期选择器里的日期，变化的是「开始日期」框里的值。
+   - 指标在上面的控件列表里时：element_id 填它的编号，label 填它的名字（一字不差）。不在列表里时：element_id 填 null，label / expect 填截图上看得到（或会出现）的原文，box 填它在截图里的位置（[ymin, xmin, ymax, xmax]，0–1000，同 box 的写法）。
+   - 优先这样选：输入框 / 下拉框的值用 "value_contains"；关掉对话框 / 弹窗用 "disappears"；打开新窗口 / 菜单 / 出现新状态用 "appears"；复选框 / 开关 / 单选用 "selected"。
+   - 例：
+     - 「点日期选择器里的 11 月 16 日」→ kind "value_contains"，label "开始日期"，expect "11/16"
+     - 「点开始日期框」（会弹出日期选择器）→ kind "appears"，expect "十一月"（或日期选择器里某个控件的名字）
+     - 「点保存」→ kind "disappears"，expect "新建事件"（对话框关掉了）
+     - 「点 Follow」→ kind "appears"，expect "Following"
+     - 「勾选 Remember me」→ kind "selected"，label "Remember me"
+     - 「在主题框里输入会议名」→ kind "value_contains"，label "Subject"，expect null（有内容就行）
+   - label / expect 保持界面原文，不翻译（客户端要逐字匹配）。
+   - 没把握、或者这一步之后没有能看出来的变化时，check 填 null。**宁可填 null 也不要乱填**：错的指标比没有更糟。status 不是 "next" 时 check 填 null。

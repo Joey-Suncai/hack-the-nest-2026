@@ -75,6 +75,20 @@ class NextGuess(BaseModel):
     expect: str | None = None
 
 
+CHECK_KINDS = ("value_contains", "appears", "disappears", "selected")
+
+
+class Check(BaseModel):
+    """关键指标：这一步做完后屏幕上应该成立的事，客户端用辅助功能 / OCR 精确核对。
+    kind 不限制成 Literal：模型给了未知的 kind 时由 finalize 清成 null，而不是整个回答解析失败。"""
+
+    kind: str
+    element_id: int | None = None  # 指标是 elements 里的控件时填它的编号
+    label: str | None = None  # 那个控件的名字（和 elements 一字不差），或要找的可见文字
+    expect: str | None = None  # value_contains：值里应包含的文字；appears / disappears：出现 / 消失的文字
+    box: list[int] | None = None  # 指标在屏幕上的位置（0–1000），给 OCR 兜底
+
+
 class NextStepOut(BaseModel):
     # 字段顺序就是模型输出的顺序：先想清楚情况（situation / reasoning / plan），再决定 status / box
     situation: str | None = None  # 一句话：屏幕上现在是什么情况
@@ -87,6 +101,7 @@ class NextStepOut(BaseModel):
     target_label: str | None
     box: list[int] | None
     expect: str | None
+    check: Check | None = None  # 这一步做完后应该成立的关键指标；没把握为 null
     next_guess: NextGuess | None = None
     element_id: int | None = None  # 选中的 elements 里的编号；null = 框是 Gemini 自己给的
 
@@ -154,6 +169,32 @@ def clean_plan(plan) -> list[str] | None:
     return items or None
 
 
+def _strip(v, limit: int = 120) -> str | None:
+    """只去首尾空白（不动中间的空格：label 要和控件名字一字不差）。"""
+    v = v.strip()[:limit].strip() if isinstance(v, str) else ""
+    return v or None
+
+
+def clean_check(check: Check | None, elements: list[Element] | None = None) -> Check | None:
+    """清洗关键指标：未知 kind、缺必要字段 → null；element_id 对不上就清空（保留 label），
+    对得上时没给的 label / box 用控件的名字 / 框补上。"""
+    if check is None:
+        return None
+    kind = (_text(check.kind, 30) or "").lower()
+    if kind not in CHECK_KINDS:
+        return None
+    label, expect, box = _strip(check.label), _strip(check.expect), normalize_box(check.box)
+    el = next((e for e in elements or [] if e.id == check.element_id), None) if check.element_id is not None else None
+    if el is not None:
+        label = label or _strip(el.name)
+        box = box or normalize_box(el.box)
+    if kind == "selected" and not label:
+        return None
+    if kind != "selected" and not (label or expect):
+        return None
+    return Check(kind=kind, element_id=el.id if el else None, label=label, expect=expect, box=box)
+
+
 def finalize(out: NextStepOut, lang: str = "zh", elements: list[Element] | None = None) -> NextStepOut:
     """保证传给客户端的数据合法：next 一定有有效框，done / unsure 一定没有框。
     element_id 对得上请求里的控件时，用控件的精确框和名字；对不上就清空 element_id、保留模型的框。"""
@@ -176,7 +217,9 @@ def finalize(out: NextStepOut, lang: str = "zh", elements: list[Element] | None 
         guess = guess.model_copy(update={"label": guess.label.strip(), "instruction": guess.instruction.strip()})
     element_id = el.id if el is not None and status == "next" else None
     return out.model_copy(update={"status": status, "box": box, "instruction": instruction, "next_guess": guess,
-                                  "element_id": element_id, "situation": _text(out.situation),
+                                  "element_id": element_id,
+                                  "check": clean_check(out.check, elements) if status == "next" else None,
+                                  "situation": _text(out.situation),
                                   "reasoning": _text(out.reasoning),
                                   "plan": clean_plan(out.plan) if status != "done" else None,
                                   "app": _text(out.app, 80)})
@@ -209,7 +252,9 @@ def _mock_step(body: NextStepIn) -> NextStepOut:
     if named is not None:  # 有 elements：选第一个有名字的控件，方便客户端测整条链路
         return NextStepOut(status="next", previous_ok=previous_ok, instruction=f"[MOCK] 点击 {named.name.strip()}",
                            target_label=named.name.strip(), box=named.box, expect="[MOCK] 画面有变化",
-                           element_id=named.id)
+                           element_id=named.id,
+                           check=Check(kind="value_contains", element_id=named.id, label=named.name.strip(),
+                                       expect=None, box=named.box))
     return NextStepOut(
         status="next",
         previous_ok=previous_ok,
@@ -422,7 +467,7 @@ def next_step(body: NextStepIn) -> NextStepOut:
         body.history[-1].ok is False or bool((body.user_note or "").strip()) or out.previous_ok is False
     )
     if out.element_id is None:  # 选中了控件就不精修：框已经是精确的
-        out = finalize(refine_box(img, out, force=retry), body.lang)
+        out = finalize(refine_box(img, out, force=retry), body.lang, body.elements)  # 带上 elements：check 的编号要能对上
     t3 = time.perf_counter()
     LAST_TIMING.clear()
     LAST_TIMING.update(prep=(t1 - t0) * 1000, gemini=(t2 - t1) * 1000, post=(t3 - t2) * 1000, total=(t3 - t0) * 1000)
