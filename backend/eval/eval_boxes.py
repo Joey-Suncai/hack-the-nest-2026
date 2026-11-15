@@ -79,7 +79,8 @@ def main():
             app, goal, history = c.get("app_en", app), c.get("goal_en", goal), c.get("history_en", history)
         items = [steps.HistoryItem(**h) for h in c["history_items"]] if c.get("history_items") else \
             [steps.HistoryItem(instruction=h, ok=True) for h in history]
-        body = steps.NextStepIn(app=app, goal=goal, lang=lang, screenshot=b64, history=items)
+        body = steps.NextStepIn(app=app, goal=goal, lang=lang, screenshot=b64, history=items,
+                                user_note=c.get("user_note"), frontmost_app=c.get("frontmost_app"))
         t0 = time.perf_counter()
         try:
             out = steps.next_step(body)
@@ -99,6 +100,9 @@ def main():
         elif out and out.box:
             cy, cx = (out.box[0] + out.box[2]) / 2, (out.box[1] + out.box[3]) / 2
             hit = truth[0] <= cy <= truth[2] and truth[1] <= cx <= truth[3]
+            for alt in c.get("alt_target_px", []):  # 其他也算对的目标（比如改用聚焦搜索）
+                an = px_to_norm(alt, size)
+                hit = hit or (an[0] <= cy <= an[2] and an[1] <= cx <= an[3])
             score = iou(out.box, truth)
         if hit and c.get("avoid_label") and out and c["avoid_label"].lower() in (out.target_label or "").lower():
             hit = False

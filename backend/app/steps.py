@@ -249,7 +249,10 @@ def next_step(body: NextStepIn) -> NextStepOut:
     if not body.history:
         out = out.model_copy(update={"previous_ok": None})
     out = finalize(out, body.lang)
-    retry = REFINE_ON_RETRY and bool(body.history) and body.history[-1].ok is False
+    # 上一步没成功：history 标了 ok=false、或者用户刚说了什么（点错了 / 没反应）、或者模型判断上一步没完成
+    retry = REFINE_ON_RETRY and bool(body.history) and (
+        body.history[-1].ok is False or bool((body.user_note or "").strip()) or out.previous_ok is False
+    )
     out = finalize(refine_box(img, out, force=retry), body.lang)
     t3 = time.perf_counter()
     LAST_TIMING.clear()

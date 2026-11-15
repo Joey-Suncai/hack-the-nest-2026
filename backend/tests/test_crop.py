@@ -95,3 +95,21 @@ def test_refine_runs_on_retry_even_when_disabled(monkeypatch):
     ok = [steps.HistoryItem(instruction="点 25", ok=True)]
     steps.next_step(NextStepIn(app="a", goal="g", screenshot=TINY_PNG_B64, history=ok))
     assert len(calls) == 1  # 上一步成功：不精修
+
+
+def test_refine_runs_when_user_note_present(monkeypatch):
+    calls = []
+
+    def fake(prompt, schema, files=None, **kw):
+        calls.append(schema)
+        if schema is NextStepOut:
+            return _small([400, 400, 500, 500])
+        return steps.RefineOut(found=True, box=[500, 500, 1000, 1000])
+
+    monkeypatch.setattr(steps, "REFINE", False)
+    monkeypatch.setattr(steps, "REFINE_ON_RETRY", True)
+    monkeypatch.setattr(steps.gemini, "generate_json", fake)
+    hist = [steps.HistoryItem(instruction="Click Chrome", ok=None)]
+    steps.next_step(NextStepIn(app="a", goal="g", screenshot=TINY_PNG_B64, history=hist,
+                               user_note="user says they clicked the wrong thing"))
+    assert len(calls) == 2

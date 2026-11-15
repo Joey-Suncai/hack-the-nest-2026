@@ -35,6 +35,7 @@ TOOLS = [
             "properties": {
                 "goal": {"type": "string", "description": "What the user wants to accomplish, short and specific (keep URLs, file names, app names)."},
                 "note": {"type": "string", "description": "Optional: what the user just said about their progress, e.g. 'user clicked the wrong thing'."},
+                "app": {"type": "string", "description": "The app the task happens in, by its usual name, e.g. 'Google Chrome', 'Zoom', 'Microsoft Excel'. Use what the user named, or the obvious app for the goal. Never ShowMe or this conversation."},
             },
             "required": ["goal"],
         },
