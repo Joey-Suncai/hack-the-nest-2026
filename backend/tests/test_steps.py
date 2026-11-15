@@ -168,8 +168,8 @@ def test_prompt_without_elements_unchanged():
     assert steps.build_prompt(NextStepIn(**kw)) == base
     assert steps.build_prompt(NextStepIn(**kw, elements=[])) == base
     p = steps.build_prompt(NextStepIn(**kw, elements=ELEMENTS))
-    assert p.startswith(base) and '#12 AXButton "New Tab" [40,950,62,966]' in p
-    assert "#13 AXTextField null [120,300,140,700]" in p and "{" not in p
+    assert p.startswith(base) and '- AXButton "New Tab" [40,950,62,966]' in p
+    assert "- AXTextField null [120,300,140,700]" in p and "{" not in p and "#12" not in p  # 不给编号
 
 
 def test_next_step_uses_element_and_skips_refine(monkeypatch):
@@ -371,7 +371,7 @@ def test_check_dropped_when_not_next():
 
 def test_next_step_keeps_check_element_on_own_box(monkeypatch):
     monkeypatch.setattr(steps.gemini, "generate_json", lambda *a, **k: _out(
-        box=[10, 10, 20, 20], check=_chk(kind="value_contains", element_id=12, expect="x")))
+        box=[300, 300, 320, 320], check=_chk(kind="value_contains", element_id=12, expect="x")))  # 框不在任何控件上
     out = steps.next_step(NextStepIn(app="a", goal="g", screenshot=TINY_PNG_B64, elements=ELEMENTS))
     assert out.element_id is None and out.check.element_id == 12 and out.check.label == "New Tab"
 
@@ -398,23 +398,36 @@ def test_prompt_mentions_check():
 
 
 # ---- 编号写成字符串（整数 element_id 经常停不下来：1583095034…）----
-def test_gemini_schema_asks_for_string_ids():
-    props = steps.NextStepRaw.model_json_schema()["properties"]
-    assert {"type": "string"} in props["element_id"]["anyOf"]
-    check_props = steps.CheckRaw.model_json_schema()["properties"]
-    assert {"type": "string"} in check_props["element_id"]["anyOf"]
-    assert list(steps.NextStepRaw.model_fields) == list(NextStepOut.model_fields)  # 输出顺序不变
+def test_gemini_schema_has_no_ids():
+    # 编号字段最容易停不下来（整数 1583095034…、字符串 "49Node49…"）：给 Gemini 的格式里干脆没有编号
+    assert "element_id" not in steps.NextStepRaw.model_fields
+    assert "element_id" not in steps.CheckRaw.model_fields
+    assert [f for f in NextStepOut.model_fields if f != "element_id"] == list(steps.NextStepRaw.model_fields)
 
 
-def test_parse_id_tolerates_common_forms():
-    assert steps.parse_id("135") == 135 and steps.parse_id("#135") == 135 and steps.parse_id("135号") == 135
-    assert steps.parse_id(12) == 12 and steps.parse_id(None) is None and steps.parse_id("Delete") is None
-    assert steps.parse_id("1583095034") is None  # 太长：当成认不出，退回模型自己的框
+def test_match_element_by_exact_name_then_nearest_duplicate():
+    els = [steps.Element(id=1, role="AXButton", name="Save", box=[100, 100, 120, 150]),
+           steps.Element(id=2, role="AXButton", name="Save", box=[800, 800, 820, 850]),
+           steps.Element(id=3, role="AXButton", name="New Tab", box=[40, 950, 62, 966])]
+    assert steps.match_element(els, " new tab ", None).id == 3  # 不分大小写、去空白
+    assert steps.match_element(els, "Save", [795, 790, 825, 860]).id == 2  # 同名：取离模型的框最近的
+    assert steps.match_element(els, "Save", [95, 95, 125, 155]).id == 1
 
 
-def test_from_raw_converts_ids_back_to_int():
+def test_match_element_by_overlap_when_name_differs():
+    els = [steps.Element(id=13, role="AXTextField", name=None, box=[120, 300, 140, 700])]
+    assert steps.match_element(els, "Search box", [118, 305, 142, 690]).id == 13  # 名字对不上，但框几乎重合
+    assert steps.match_element(els, "Search box", [500, 500, 520, 520]) is None  # 不重合：用模型自己的框
+    assert steps.match_element([], "x", [1, 2, 3, 4]) is None
+
+
+def test_from_raw_fills_ids_from_matching():
+    els = [steps.Element(id=12, role="AXButton", name="New Tab", box=[40, 950, 62, 966]),
+           steps.Element(id=30, role="AXStaticText", name="New Message", box=[200, 600, 220, 800])]
     raw = steps.NextStepRaw(status="next", previous_ok=None, instruction="Click New Tab", target_label="New Tab",
-                            box=[40, 950, 62, 966], expect=None, element_id="12",
-                            check=steps.CheckRaw(kind="appears", element_id="#3", expect="New Tab"))
-    out = steps.from_raw(raw)
-    assert type(out) is NextStepOut and out.element_id == 12 and out.check.element_id == 3
+                            box=[41, 949, 63, 967], expect=None,
+                            check=steps.CheckRaw(kind="appears", label="New Message"))
+    out = steps.from_raw(raw, els)
+    assert type(out) is NextStepOut and out.element_id == 12 and out.check.element_id == 30
+    raw.status = "done"
+    assert steps.from_raw(raw, els).element_id is None

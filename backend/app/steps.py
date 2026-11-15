@@ -107,34 +107,87 @@ class NextStepOut(BaseModel):
     element_id: int | None = None  # 选中的 elements 里的编号；null = 框是 Gemini 自己给的
 
 
-# ---- 给 Gemini 的输出格式：编号写成字符串 ----
-# 实测：整数 element_id 经常停不下来（"element_id": 1583095034…，16 个真实请求里 9 个写满输出上限）。
-# JSON 整数没有结束符号，字符串有引号：让模型写 "135"，后端再转回数字。对客户端的接口不变（还是整数）。
-class CheckRaw(Check):
-    element_id: str | None = None  # 控件编号，写成字符串，如 "12"
+# ---- 给 Gemini 的输出格式：没有控件编号 ----
+# 实测：编号字段最容易「停不下来」：整数时 "element_id": 1583095034…（16 个真实请求里 9 个写满上限），
+# 改成字符串后还会 "49Node49…"。所以干脆不让模型写编号：它照常给 target_label（照抄控件名字）和 box，
+# 后端拿这两样去 elements 里找最像的那个控件（match_element），用它的精确框。对客户端的接口不变（还是整数 element_id）。
+class CheckRaw(BaseModel):
+    kind: str
+    label: str | None = None
+    expect: str | None = None
+    box: list[int] | None = None
 
 
-class NextStepRaw(NextStepOut):
+class NextStepRaw(BaseModel):
+    # 字段顺序 = 模型输出顺序（和 NextStepOut 一样，只是没有编号）
+    situation: str | None = None
+    reasoning: str | None = None
+    plan: list[str] | None = None
+    app: str | None = None
+    status: Literal["next", "done", "unsure"]
+    previous_ok: bool | None
+    instruction: str
+    target_label: str | None
+    box: list[int] | None
+    expect: str | None
     check: CheckRaw | None = None
-    element_id: str | None = None  # 控件编号，写成字符串，如 "135"
+    next_guess: NextGuess | None = None
 
 
-def parse_id(v) -> int | None:
-    """模型写的编号 → 整数。容忍 "135"、"#135"、"135号"、135；认不出 / 太长（> 4 位）→ None（退回模型自己的框）。"""
-    if v is None or isinstance(v, bool):
+def _norm_name(s) -> str:
+    """比较控件名字用：不分大小写、合并空白、去掉首尾的引号 / 省略号 / 箭头。"""
+    s = " ".join(str(s or "").split()).casefold()
+    return s.strip(" \"'“”‘’…→:：.")
+
+
+def _center(box) -> tuple[float, float]:
+    y1, x1, y2, x2 = box
+    return (y1 + y2) / 2, (x1 + x2) / 2
+
+
+def _iou(a, b) -> float:
+    ya, xa = max(a[0], b[0]), max(a[1], b[1])
+    yb, xb = min(a[2], b[2]), min(a[3], b[3])
+    inter = max(0, yb - ya) * max(0, xb - xa)
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / union if union > 0 else 0.0
+
+
+MATCH_IOU = 0.5  # 名字对不上时，框和控件重叠到这个程度才算同一个
+
+
+def match_element(elements: list[Element] | None, label: str | None, box) -> Element | None:
+    """按名字 + 位置在控件清单里找模型指的那个控件：
+    1. 名字一样（不分大小写）：有几个同名就取离模型的框最近的
+    2. 名字对不上：取和模型的框重叠最多的，IoU ≥ MATCH_IOU 才算
+    都不行 → None（用模型自己的框）。"""
+    els = [e for e in elements or [] if normalize_box(e.box) is not None]
+    if not els:
         return None
-    if isinstance(v, int):
-        return v if 0 <= v < 10000 else None
-    m = re.search(r"\d+", str(v))
-    return int(m.group()) if m and len(m.group()) <= 4 else None
+    mbox = normalize_box(box)
+    want = _norm_name(label)
+    if want:
+        same = [e for e in els if e.name and _norm_name(e.name) == want]
+        if same:
+            if mbox is None or len(same) == 1:
+                return same[0]
+            cy, cx = _center(mbox)
+            return min(same, key=lambda e: (_center(e.box)[0] - cy) ** 2 + (_center(e.box)[1] - cx) ** 2)
+    if mbox is None:
+        return None
+    best = max(els, key=lambda e: _iou(mbox, normalize_box(e.box)))
+    return best if _iou(mbox, normalize_box(best.box)) >= MATCH_IOU else None
 
 
-def from_raw(raw: NextStepOut) -> NextStepOut:
-    """Gemini 的回答（编号是字符串）→ 接口用的 NextStepOut（编号是整数）。"""
+def from_raw(raw: NextStepRaw | NextStepOut, elements: list[Element] | None = None) -> NextStepOut:
+    """Gemini 的回答（没有编号）→ 接口用的 NextStepOut：按名字 + 位置找出对应的控件编号。"""
     data = raw.model_dump()
-    data["element_id"] = parse_id(data.get("element_id"))
-    if isinstance(data.get("check"), dict):
-        data["check"]["element_id"] = parse_id(data["check"].get("element_id"))
+    el = match_element(elements, data.get("target_label"), data.get("box")) if data.get("status") == "next" else None
+    data["element_id"] = el.id if el is not None else data.get("element_id")
+    chk = data.get("check")
+    if isinstance(chk, dict):
+        cel = match_element(elements, chk.get("label"), chk.get("box")) if chk.get("label") else None
+        chk["element_id"] = cel.id if cel is not None else chk.get("element_id")
     return NextStepOut.model_validate(data)
 
 
@@ -313,12 +366,12 @@ def _clean(text: str, limit: int = 60) -> str:
 
 
 def elements_section(elements: list[Element]) -> str:
-    """一行一个控件：#12 AXButton "New Tab" [40,950,62,966]"""
+    """一行一个控件：AXButton "New Tab" [40,950,62,966]（不给编号：模型写编号容易停不下来，后端按名字 + 位置匹配）"""
     lines = []
     for e in elements[:MAX_ELEMENTS]:
         name = _clean(e.name or "")
         label = f'"{name}"' if name else "null"
-        lines.append(f"#{e.id} {_clean(e.role, 30)} {label} [{','.join(str(v) for v in e.box)}]")
+        lines.append(f"- {_clean(e.role, 30)} {label} [{','.join(str(v) for v in e.box)}]")
     return gemini.load_prompt("next_step_elements", elements="\n".join(lines))
 
 
@@ -486,7 +539,7 @@ def next_step(body: NextStepIn) -> NextStepOut:
     LAST_THINKING.clear()
     LAST_THINKING.update(level=thinking, reason=why)
     print(f"[next-step] thinking={thinking or 'default'} (reason: {why})")
-    out = from_raw(gemini.generate_json(prompt, NextStepRaw, files=[(img, mime)], thinking=thinking))
+    out = from_raw(gemini.generate_json(prompt, NextStepRaw, files=[(img, mime)], thinking=thinking), body.elements)
     t2 = time.perf_counter()
     if not body.history:
         out = out.model_copy(update={"previous_ok": None})

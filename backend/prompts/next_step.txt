@@ -14,7 +14,7 @@
 用户刚刚说的话（要点）：{user_note}
 （如果用户说点错了、跳过了、找不到、卡住了，先按截图判断现在的真实状态，再给出从这里继续的下一步；instruction 可以先用半句话回应用户。）
 
-先想清楚，再回答（输出时按顺序：先填 situation、reasoning、plan、app，再决定 status、box、element_id、instruction、expect，然后是 check，后面这些必须和 reasoning 一致）：
+先想清楚，再回答（输出时按顺序：先填 situation、reasoning、plan、app，再决定 status、box、instruction、expect，然后是 check，后面这些必须和 reasoning 一致）：
 A. situation：一句话说清屏幕上现在是什么情况（哪个 App 在前面、开着什么页面 / 窗口 / 弹窗、缺了什么），用{lang_name}，简短。例："Chrome opened the Google sign-in page; Gmail is not signed in."
 B. reasoning：一到两句短话，把现在的情况和目标联系起来：离目标还差什么、为什么下一步是这个，用{lang_name}。例："Gmail needs you to sign in first; this is part of the task, not a wrong page."
 C. 前置条件也是任务的一部分。截图里出现下面这些情况时，先处理它，再接着做原来的步骤：
@@ -24,7 +24,7 @@ C. 前置条件也是任务的一部分。截图里出现下面这些情况时�
    - 更新提示、"What's new" 之类的弹窗：点关闭或「稍后」。
    - 还在加载：按规则 5，等一下（status 填 "unsure"）。
    - 需要的软件还没打开：按规则 6，教用户打开它。
-   - 要选的项不在可见范围里（列表 / 下拉菜单 / 页面要滚动，比如要选 14:00，但时间列表只显示到 06:45）：status 填 "next"，instruction 让用户在列表里滚动（如 "Scroll down in the time list to find 14:00."），box 框住**可以滚动的整个列表区域**，element_id 填 null。**绝不要框一个看得见但不对的选项来凑数**（instruction 说 14:00，框就不能落在 06:00 上）。
+   - 要选的项不在可见范围里（列表 / 下拉菜单 / 页面要滚动，比如要选 14:00，但时间列表只显示到 06:45）：status 填 "next"，instruction 让用户在列表里滚动（如 "Scroll down in the time list to find 14:00."），box 框住**可以滚动的整个列表区域**。**绝不要框一个看得见但不对的选项来凑数**（instruction 说 14:00，框就不能落在 06:00 上）。
    出现这些情况时，把它插到 plan 的最前面，并在 instruction 里用半句话说明原因，如 "Gmail needs you to sign in first — click your account."。
 D. 流程换了 App：如果上面写了「最前面的 App 刚刚换了」，或者截图里最前面的是别的 App，先判断这个 App 是不是流程的一部分。例：在 Zoom 里点了「保存」，Chrome 打开了 Google 日历 / Google 登录页——这是流程的一部分，就在 Chrome 里继续，app 填 "Google Chrome"，**不要**让用户切回 Zoom。只有新 App 明显和目标无关（终端、聊天软件、ShowMe 自己）时，才让用户切回去。
 E. 如果上面写了「客户端已确认上一步」：用户确实做了上一步。除非截图明显显示出错，否则就当它已经完成（previous_ok 填 true），**不要对同一个目标重复同一句指令**。如果那一下只是让控件获得了焦点 / 被选中（下拉框、时间框、输入框，辅助功能写着 focused，画面几乎没变），下一步就是后续动作：再点一次它把列表打开、输入要的值，或者从已经打开的列表里选。
@@ -65,7 +65,7 @@ H. 目标说得含糊时，选最可能的那条具体做法，并且和目标�
    - instruction、expect：写法同上
    例（TextEdit）：这一步是「点击菜单栏的『格式』」，点完会展开格式菜单，下一步多半是点「字体」→ label 填 字体，instruction 填 Click Font in the Format menu.，expect 填 The Font submenu opens.
    完全猜不到、或者下一个要点的元素只有图标没有文字（比如 + 号、齿轮、铅笔图标）时，next_guess 填 null；status 不是 "next" 时填 null。
-13. check（关键指标，所有软件通用，用来精确判断用户做完了**这一步**）：写出这一步做完之后屏幕上一定会成立的一件事。客户端每 1.5 秒用辅助功能 / OCR 核对一次，成立了就算这一步成功。字段：kind、element_id、label、expect、box（没用到的字段填 null）。
+13. check（关键指标，所有软件通用，用来精确判断用户做完了**这一步**）：写出这一步做完之后屏幕上一定会成立的一件事。客户端每 1.5 秒用辅助功能 / OCR 核对一次，成立了就算这一步成功。字段：kind、label、expect、box（没用到的字段填 null）。
    - kind 只能是下面四种之一：
      - "value_contains"：某个输入框 / 搜索框 / 下拉框的值变成了某个内容。label 填那个控件的名字，expect 填值里应包含的文字（如搜索词、"14:00"、"11/16"）；只要求有内容（比如让用户自己写标题）时 expect 填 null。
      - "appears"：出现了新的东西（新窗口、新标签页、菜单、弹出框、侧边栏视图、按钮变成新状态）。expect 填会出现的文字。
@@ -74,7 +74,7 @@ H. 目标说得含糊时，选最可能的那条具体做法，并且和目标�
    - 选**这一步一定会改变**的指标。指标常常不是要点的那个元素：点日期选择器里的日期，变化的是日期框里的值；点「保存」，变化的是对话框消失了。
    - 对照现在的截图检查：appears 的文字现在截图里**还没有**（已经看得到的侧边栏项、要点的按钮自己的名字都不行）；disappears 的文字现在**看得到**；value_contains 的 expect 现在**还不在**那个框里。做不到就填 null。
    - 让用户输入具体内容的步骤（如 "Type cats into the search box and press Enter."）：用 value_contains，label 填那个框的名字，expect 填要输入的内容。
-   - 指标在上面的控件列表里时：element_id 填它的编号，label 填它的名字（一字不差）。不在列表里时：element_id 填 null，label / expect 填截图上看得到（或会出现）的原文，box 填它在截图里的位置（[ymin, xmin, ymax, xmax]，0–1000，同 box 的写法）。
+   - 指标在上面的控件列表里时：label 照抄它的名字（一字不差）。不在列表里时：label / expect 填截图上看得到（或会出现）的原文，box 填它在截图里的位置（[ymin, xmin, ymax, xmax]，0–1000，同 box 的写法）。
    - 优先这样选：输入框 / 下拉框的值用 "value_contains"；关掉对话框 / 弹窗用 "disappears"；打开新窗口 / 菜单 / 视图、出现新状态用 "appears"；复选框 / 开关 / 单选用 "selected"。
    - 例（不同软件）：
      - VS Code「点左边的资源管理器图标」→ kind "appears"，expect "EXPLORER"；「点文件 main.py」→ kind "appears"，expect "main.py"（标签栏里出现这个文件名，前提是现在还没打开）
