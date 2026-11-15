@@ -178,6 +178,7 @@ def test_silence_now_drops_queued_and_incoming_audio():
         def play(self, b): self.played.append(b)
         def clear(self): self.cleared += 1
         def set_volume(self, v): self.vol = v
+        def playing(self): return False
 
     a = FilteredAgentAudio(Gate(voiceprint=None, log=lambda *x: None))
     a.engine = FakeEngine()

@@ -187,6 +187,7 @@ class FilteredAgentAudio(AudioInterface):
         self.sent_voice_sumsq = 0.0
         self.on_first_audio = None  # 计时：用户说完后 Agent 的第一段声音开始播放时回调（音频线程里）
         self.await_first_audio = False
+        self.on_voice_start = None  # Agent 开始说一段新的话（播放队列本来是空的）时回调（SDK 线程里）
 
     # ---- SDK 要求的 4 个方法 ----
     def start(self, input_callback):
@@ -218,6 +219,8 @@ class FilteredAgentAudio(AudioInterface):
                 self.await_first_audio = False
                 if self.on_first_audio:
                     self.on_first_audio()
+            if not self.engine.playing() and self.on_voice_start:
+                self.on_voice_start()
             self.engine.play(audio)
 
     def silence_now(self):

@@ -8,7 +8,7 @@ say(text, interrupt) 打断正在读的，清空队列（换到新的一步时�
 
 from PyQt6.QtCore import QObject, QTimer
 
-from showme import api, audio
+from showme import api, audio, sync
 from showme.wording import speakable
 from showme.config import CAPTION_HOLD_S
 
@@ -21,8 +21,8 @@ def estimate_seconds(text: str) -> float:
 
 
 class _Item:
-    def __init__(self, text: str):
-        self.text = text
+    def __init__(self, text: str, tag: int | None = None):
+        self.text, self.tag = text, tag  # tag：第几步（[sync] 计时用），不是步骤为 None
         self.ready = False
         self.mp3: bytes | None = None
 
@@ -43,12 +43,12 @@ class Narrator(QObject):
         self.watch.setInterval(100)
         self.watch.timeout.connect(self._check_audio)
 
-    def say(self, text: str, interrupt: bool = False) -> None:
+    def say(self, text: str, interrupt: bool = False, tag: int | None = None) -> None:
         if not text or self.muted:
             return
         if interrupt:
             self.stop()
-        item = _Item(text)
+        item = _Item(text, tag)
         self.queue.append(item)
         gen = self._gen
         if self.voice_enabled():
@@ -88,6 +88,8 @@ class Narrator(QObject):
         if self.current.mp3:
             try:
                 audio.play(self.current.mp3)
+                if self.current.tag is not None:
+                    sync.voice(self.current.tag, "client")
                 self.watch.start()
                 return
             except Exception as e:  # noqa: BLE001  放不出声音就只显示字幕

@@ -25,7 +25,7 @@ from pathlib import Path
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
-from showme import api, apps, capture, enroll, ocr, wording
+from showme import api, apps, capture, enroll, ocr, sync, wording
 from showme.change import ChangeDetector, mask_rects
 from showme.config import (CLICK_EXTRA_PAD, CLICK_SETTLE_S, DEBUG_DETECT, HIGHLIGHT_PAD, LOG, MIC_MAX_S, POLL_S,
                            TALK_MAX_S, TYPE_IDLE_S)
@@ -106,6 +106,8 @@ class Controller(QObject):
         self._guess: dict | None = None  # 上一次 next-step 返回的 next_guess（预测的下一步）
         self._provisional: dict | None = None  # OCR 秒出的框，等 Gemini 核对
         self._t_change: float | None = None  # 画面变化被检测到的时刻（算出框耗时）
+        self._sync_step: int | None = None  # 计时：当前显示的是第几步（[sync] 日志）
+        self._user_turn_since_step = True  # 这一步出框之后用户有没有开过口 / 打过字
         self.step_listener = self._agent_notify  # 新的一步出来时回调 (instruction, kind)
         self.main = MainThread()  # Agent 的 client tool 在 SDK 线程里跑，碰界面 / 截图要转到主线程
         self.agent: AgentSession | None = None
@@ -158,6 +160,7 @@ class Controller(QObject):
         self.lang = self.panel.lang()
         self.panel.add_message("user", text)
         if self.agent and self.agent.active:  # 实时语音模式：打字也交给 Agent（同一个「大脑」）
+            self._user_turn_since_step = True
             self._remember("user", text)
             if not self.agent.send(text):
                 self.panel.set_error(t("live_unavailable"))
@@ -463,13 +466,16 @@ class Controller(QObject):
 
     def _say_step(self, text: str):
         # 刚回复过用户：这一步排在回复后面读；否则打断上一句没读完的
-        self.narrator.say(text, interrupt=not self._speak_after_reply)
+        self.narrator.say(text, interrupt=not self._speak_after_reply, tag=self._sync_step)
         self._speak_after_reply = False
 
-    def _show_step(self, box: list[int], text: str):
+    def _show_step(self, box: list[int], text: str, kind: str = "gemini"):
         rect = expand(box_to_rect(box, *self._screen_wh), HIGHLIGHT_PAD)
         self.overlay.show_target(rect, text)
         self.last_instruction = text
+        self._sync_step = len(self.history) + 1
+        self._user_turn_since_step = False
+        sync.box(self._sync_step, kind, text)
 
     def _speed_log(self, how: str):
         if self._t_change is not None:
@@ -493,13 +499,13 @@ class Controller(QObject):
                 print(f"[speed] Gemini 核对：和 OCR 框一致（Gemini 用了 {(time.perf_counter() - self._t_change) * 1000:.0f} ms）", flush=True)
                 self._wait(base_img=self._req_img)  # 用户可能在等 Gemini 时已经点了：用那张截图当基准帧
                 return
-            self._show_step(r["box"], text)
+            self._show_step(r["box"], text, "correction" if prov else ("tool" if source == "tool" else "gemini"))
             self.panel.allow_retry(True)
             self._update_steps()
             if prov:
                 print(f"[speed] Gemini 更正：OCR 框 {prov['box']} → Gemini 框 {r['box']}", flush=True)
                 self.panel.add_message("step", t("step_fixed", n=len(self.history) + 1, text=text))
-                self.narrator.say(text, interrupt=True)
+                self.narrator.say(text, interrupt=True, tag=self._sync_step)
                 self._notify(text, "correction")
                 self._wait(base_img=self._req_img)
             else:
@@ -676,7 +682,7 @@ class Controller(QObject):
                     print(f"[speed] OCR 没找到 {label!r}（{ms:.0f} ms），等 Gemini", flush=True)
                 return
             self._provisional = {"box": box, "instruction": instr}
-            self._show_step(box, instr)
+            self._show_step(box, instr, "ocr")
             self._speed_log(f"OCR 秒出，识别 {ms:.0f} ms")
             self.panel.add_step(len(self.history) + 1, instr)
             self._update_steps()
@@ -715,6 +721,7 @@ class Controller(QObject):
             self.agent.agent_said.connect(self._on_agent_reply)
             self.agent.voice_event.connect(self._on_voice_event)
             self.agent.first_audio.connect(self._on_first_audio)
+            self.agent.voice_start.connect(self._on_agent_voice_start)
             self.panel.set_status(t("live_connecting"))
             self.agent.start()
         elif not on and self.agent:
@@ -768,7 +775,11 @@ class Controller(QObject):
     def _on_first_audio(self):
         self._timing("first_audio")
 
+    def _on_agent_voice_start(self):
+        sync.voice(self._sync_step if self.task is not None else None, "agent")
+
     def _on_agent_user(self, text: str):
+        self._user_turn_since_step = True
         self._timing("transcript")
         print(f"[agent] 🧑 转写：{text!r}", flush=True)
         self.panel.add_message("user", text)
@@ -802,6 +813,8 @@ class Controller(QObject):
         epoch, t0p = self._stop_epoch, time.perf_counter()
         goal = (params.get("goal") or "").strip()
         note = (params.get("note") or "").strip() or None
+        if self._sync_step is not None and self.overlay._rect is not None and not self._user_turn_since_step:
+            sync.log(f"step {self._sync_step} agent called show_next_step by itself (step still shown, user silent; note={note!r})")
         t0 = time.time()
         try:
             img, payload = self.main.call(lambda: self._tool_prepare(goal, note))
