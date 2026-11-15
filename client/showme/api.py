@@ -23,9 +23,18 @@ def auth_headers(path: str) -> dict:
     return {"X-ShowMe-Token": API_TOKEN}
 
 
+def _send(method: str, path: str, timeout: float, **kw) -> httpx.Response:
+    """后端刚重启（--reload）时，连接池里的旧连接已经被对方关掉：第一次会马上失败。这种情况重试一次。"""
+    try:
+        return _client.request(method, path, timeout=timeout, headers=auth_headers(path), **kw)
+    except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError) as e:
+        print(f"[api] {method} {path} → 连接断了（{e!r}），重试一次", flush=True)
+        return _client.request(method, path, timeout=timeout, headers=auth_headers(path), **kw)
+
+
 def _request(method: str, path: str, timeout: float, **kw) -> httpx.Response:
     try:
-        r = _client.request(method, path, timeout=timeout, headers=auth_headers(path), **kw)
+        r = _send(method, path, timeout, **kw)
     except httpx.TimeoutException as e:
         print(f"[api] {method} {path} → 超时（{timeout}s）：{e!r}", flush=True)
         raise ApiError(t("err_timeout"))

@@ -85,3 +85,19 @@ def test_401_shows_token_message(monkeypatch):
     _use(monkeypatch, lambda r: httpx.Response(401, json={"error": "口令不对"}))
     with pytest.raises(api.ApiError, match="Wrong access token — check SHOWME_TOKEN"):
         api.next_step({})
+
+
+def test_dropped_connection_is_retried_once(monkeypatch):
+    import httpx
+
+    from showme import api
+    calls = []
+
+    def handler(r):
+        calls.append(1)
+        if len(calls) == 1:
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+        return httpx.Response(200, json={"status": "ok"})
+
+    monkeypatch.setattr(api, "_client", httpx.Client(transport=httpx.MockTransport(handler), base_url="http://x"))
+    assert api._request("GET", "/api/health", 5).json() == {"status": "ok"} and len(calls) == 2
