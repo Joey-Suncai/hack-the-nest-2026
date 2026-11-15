@@ -168,3 +168,23 @@ def test_enroll_rejects_background_only_in_noisy_room():
     background = np.full(16000, 10 ** (-27 / 20), np.float32)
     with pytest.raises(NoVoiceError):
         enroll(lambda s: background, lambda a: np.array([1.0, 0.0]), on_prompt=lambda *a: None, clip_s=1, min_level_db=-19)
+
+
+def test_silence_now_drops_queued_and_incoming_audio():
+    from showme.audio_engine import FilteredAgentAudio
+
+    class FakeEngine:
+        def __init__(self): self.played, self.cleared, self.vol = [], 0, None
+        def play(self, b): self.played.append(b)
+        def clear(self): self.cleared += 1
+        def set_volume(self, v): self.vol = v
+
+    a = FilteredAgentAudio(Gate(voiceprint=None, log=lambda *x: None))
+    a.engine = FakeEngine()
+    a.output(b"x")
+    a.silence_now()
+    a.output(b"y")  # Stop 之后还在路上的声音要丢掉
+    assert a.engine.played == [b"x"] and a.engine.cleared == 1
+    a.muted = False
+    a.output(b"z")
+    assert a.engine.played == [b"x", b"z"]

@@ -101,6 +101,7 @@ class Controller(QObject):
         self.main = MainThread()  # Agent 的 client tool 在 SDK 线程里跑，碰界面 / 截图要转到主线程
         self.agent: AgentSession | None = None
         self._enrolling = False
+        self._stopped = False  # 按了 Stop：Agent 的 tool 调用一律返回 STOPPED，直到用户再开口 / 打字
         self._log_dir = None
         self._n_req = 0
         self._n_log = 0
@@ -131,6 +132,7 @@ class Controller(QObject):
         self.lang = self.panel.lang()
         self.panel.add_message("user", text)
         if self.agent and self.agent.active:  # 实时语音模式：打字也交给 Agent（同一个「大脑」）
+            self._resume_after_stop()
             self._remember("user", text)
             if not self.agent.send(text):
                 self.panel.set_error(t("live_unavailable"))
@@ -304,7 +306,11 @@ class Controller(QObject):
         self.panel.set_status(status)
 
     def stop(self):
-        """面板上的「停止」按钮。"""
+        """面板上的「停止」按钮。实时语音模式下也要让 Agent 立刻安静、不再自己开始新任务。"""
+        if self.agent and self.agent.active:
+            self._stopped = True
+            self.agent.hush()
+            print("[agent] Stop：本地静音，Agent 已通知停下等待", flush=True)
         self.narrator.stop()
         if self.recorder.recording:
             self.recorder.stop()
@@ -632,7 +638,15 @@ class Controller(QObject):
         self.panel.set_error(t("live_unavailable"))
         print(f"[agent] 退回打字模式：{why}", flush=True)
 
+    def _resume_after_stop(self):
+        if self._stopped:
+            self._stopped = False
+            if self.agent:
+                self.agent.unhush()
+            print("[agent] 用户又开口了：取消 Stop 状态", flush=True)
+
     def _on_agent_user(self, text: str):
+        self._resume_after_stop()
         self.panel.add_message("user", text)
         self._remember("user", text)
 
@@ -647,6 +661,7 @@ class Controller(QObject):
         elif kind == "reject":
             self.panel.set_status(t("ignored_voice"))
         elif kind == "accept":
+            self._resume_after_stop()
             self.panel.set_status(t("listening_agent"))
 
     def _agent_notify(self, text: str, kind: str):
@@ -659,6 +674,8 @@ class Controller(QObject):
 
     # ---- client tools（在 SDK 线程里调用）----
     def tool_show_next_step(self, params: dict) -> str:
+        if self._stopped:
+            return "STOPPED: the user pressed Stop"
         goal = (params.get("goal") or "").strip()
         note = (params.get("note") or "").strip() or None
         t0 = time.time()
@@ -702,6 +719,8 @@ class Controller(QObject):
         return img, payload
 
     def tool_look_at_screen(self, params: dict) -> str:
+        if self._stopped:
+            return "STOPPED: the user pressed Stop"
         q = (params.get("question") or "").strip() or "What is on the screen?"
         t0 = time.time()
         try:
@@ -743,6 +762,8 @@ class Controller(QObject):
             g.push_to_talk = True
             self.panel.tap_box.setChecked(True)
         g.key_down = not g.key_down
+        if g.key_down:
+            self._resume_after_stop()
         self.panel.set_talking(g.key_down)
         print(f"[voice] 收音 {'开始' if g.key_down else '结束'}", flush=True)
 

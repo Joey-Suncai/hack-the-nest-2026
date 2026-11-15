@@ -290,6 +290,7 @@ class Panel(QWidget):
         self.live_box.setChecked(on)
         self.live_box.blockSignals(False)
         self.mic_btn.setToolTip(t("talk_tip") if on else t("mic_tip"))
+        self.stop_btn.setEnabled(on or self.stop_btn.isEnabled())
 
     def set_talking(self, on: bool) -> None:
         """点按收音模式下：正在收音时麦克风按钮变红。"""
@@ -310,7 +311,8 @@ class Panel(QWidget):
 
     # ---- 任务 ----
     def set_running(self, running: bool) -> None:
-        self.stop_btn.setEnabled(running)
+        # 实时语音模式下 Stop 任何时候都能点（Agent 可能在说话，即使没有任务）
+        self.stop_btn.setEnabled(running or self.live_box.isChecked())
         if not running:
             self.retry_btn.setEnabled(False)
 

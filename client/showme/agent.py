@@ -166,6 +166,16 @@ class AgentSession(QObject):
             print(f"[agent] 发送失败：{e}", flush=True)
             return False
 
+    def hush(self):
+        """用户按了 Stop：本地马上安静，并告诉 Agent 停下来等用户再开口（不断开连接）。"""
+        if self.audio:
+            self.audio.silence_now()
+        self.send("[stopped] The user pressed Stop. Stop talking and wait until the user speaks again.")
+
+    def unhush(self):
+        if self.audio:
+            self.audio.muted = False
+
     def stop(self):
         self._closing = True
         conv, self.conv = self.conv, None

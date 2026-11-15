@@ -181,6 +181,7 @@ class FilteredAgentAudio(AudioInterface):
         self._running = False
         self.engine = None  # start() 里才建（SDK 在它自己的线程里调 start）
         self.started = threading.Event()
+        self.muted = False  # 按了 Stop：丢掉 Agent 还在发过来的声音，直到用户再开口
 
     # ---- SDK 要求的 4 个方法 ----
     def start(self, input_callback):
@@ -207,8 +208,15 @@ class FilteredAgentAudio(AudioInterface):
               f"ShowMe 没说话时发出的语音 {self.stats['accepted_while_quiet']} 段", flush=True)
 
     def output(self, audio: bytes):
-        if self.engine:
+        if self.engine and not self.muted:
             self.engine.play(audio)
+
+    def silence_now(self):
+        """Stop：立刻清空播放队列，并丢掉之后还在路上的声音。"""
+        self.muted = True
+        if self.engine:
+            self.engine.clear()
+            self.engine.set_volume(1.0)
 
     def interrupt(self):
         if self.engine:
