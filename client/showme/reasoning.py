@@ -2,7 +2,8 @@
 接口见 docs/API.md。"""
 
 SKIP_FRONT = ("showme", "terminal", "claude", "python")  # 用户在这些里跟 ShowMe 说话 / 启动它：不算「切到别的软件」
-CONFIRM_KINDS = {"click": "click", "typing": "typing", "enter": "enter"}  # _step_completed 的 reason → confirmed.kind
+# "check"：关键指标检查成立了（keycheck.py），后端当作确认过的点击；detail 写 "check met: 开始日期 = 2026/11/16"
+CONFIRM_KINDS = {"click": "click", "typing": "typing", "enter": "enter", "check": "click"}  # _step_completed 的 reason → confirmed.kind
 
 
 def skipped_app(name: str | None) -> bool:

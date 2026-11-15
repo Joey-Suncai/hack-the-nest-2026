@@ -41,7 +41,7 @@ def test_refine_replaces_small_box(monkeypatch):
 
     def fake(prompt, schema, files=None, **kw):
         calls.append(schema)
-        if schema is NextStepOut:
+        if schema in (NextStepOut, steps.NextStepRaw):  # 主调用传的是 NextStepRaw（不带编号）
             return _small([400, 400, 500, 500])
         return steps.RefineOut(found=True, box=[500, 500, 1000, 1000])
 
@@ -53,7 +53,7 @@ def test_refine_replaces_small_box(monkeypatch):
 
 def test_refine_failure_keeps_original(monkeypatch):
     def fake(prompt, schema, files=None, **kw):
-        if schema is NextStepOut:
+        if schema in (NextStepOut, steps.NextStepRaw):  # 主调用传的是 NextStepRaw（不带编号）
             return _small([400, 400, 500, 500])
         raise steps.gemini.GeminiError("boom")
 
@@ -81,7 +81,7 @@ def test_refine_runs_on_retry_even_when_disabled(monkeypatch):
 
     def fake(prompt, schema, files=None, **kw):
         calls.append(schema)
-        if schema is NextStepOut:
+        if schema in (NextStepOut, steps.NextStepRaw):  # 主调用传的是 NextStepRaw（不带编号）
             return _small([400, 400, 500, 500])
         return steps.RefineOut(found=True, box=[500, 500, 1000, 1000])
 
@@ -102,7 +102,7 @@ def test_refine_runs_when_user_note_present(monkeypatch):
 
     def fake(prompt, schema, files=None, **kw):
         calls.append(schema)
-        if schema is NextStepOut:
+        if schema in (NextStepOut, steps.NextStepRaw):  # 主调用传的是 NextStepRaw（不带编号）
             return _small([400, 400, 500, 500])
         return steps.RefineOut(found=True, box=[500, 500, 1000, 1000])
 

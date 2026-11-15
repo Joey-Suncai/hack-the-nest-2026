@@ -26,7 +26,23 @@ DEFAULT_MODEL = "gemini-3.6-flash"
 MODEL = os.getenv("GEMINI_MODEL") or DEFAULT_MODEL
 MOCK = os.getenv("GEMINI_MOCK", "0").strip().lower() in ("1", "true", "yes")
 TIMEOUT_S = float(os.getenv("GEMINI_TIMEOUT", "30"))
-RETRIES = 1
+# 最多再发几次（总共 RETRIES + 1 次）。2：对冲那次 + 内容不能用时还能再重发一次
+RETRIES = int(os.getenv("GEMINI_RETRIES", "2"))
+# 对冲请求：第一次请求这么多秒还没回来就再发一次一样的，谁先回来用谁。
+# 日志：大部分 2–3 s，偶尔一次挂满 30 s 才回 504 DEADLINE_EXCEEDED，重试 2.5 s 就好 → 一步卡 32–45 s。0 = 关掉
+HEDGE_AFTER_S = float(os.getenv("GEMINI_HEDGE_AFTER", "6"))
+# 输出上限：结构化输出偶尔卡在一个数字上无限重复（"2525…"），写满上限才停。正常回答 250–300 token
+# （重放时最长见过一次 1638），上限 4096 时卡死要白跑约 16 s；1000 → 3–4 s 就截断、马上重发。
+# 思考更深（medium / high / 模型默认）时思考也可能算进输出，上限用 MAX_OUTPUT_TOKENS_DEEP
+MAX_OUTPUT_TOKENS = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "1000"))
+MAX_OUTPUT_TOKENS_DEEP = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS_DEEP", "4096"))
+
+
+def output_cap(thinking: str | None) -> int | None:
+    """这次调用的输出上限；0 = 不设。"""
+    cap = MAX_OUTPUT_TOKENS if (thinking or "").lower() in ("minimal", "low") else MAX_OUTPUT_TOKENS_DEEP
+    return cap or None
+_pool = None
 GROUNDED_TRIES = 3  # generate_grounded 并发几次（见函数说明）
 
 T = TypeVar("T", bound=BaseModel)
@@ -84,29 +100,86 @@ _CLIENT_ERRORS = {
 }
 
 
-def _call(prompt: str, files=None, config=None):
+def _executor():
+    global _pool
+    if _pool is None:
+        from concurrent.futures import ThreadPoolExecutor
+
+        _pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="gemini")
+    return _pool
+
+
+class _BadOutput(Exception):
+    """Gemini 回了，但内容不能用：写满输出上限（MAX_TOKENS，被截成半截 JSON）、JSON 解析不了、空回复。
+    日志：结构化输出偶尔卡在一个数字上无限重复（"2525252525…"），写满上限才停 → 当成这一次失败。"""
+
+
+def _finish_reason(resp) -> str:
+    try:
+        return str(resp.candidates[0].finish_reason or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _call(prompt: str, files=None, config=None, parse=None):
+    """调 Gemini。最多发 RETRIES + 1 次：
+    - 第一次很快就失败（5xx、网络）→ 等 1 s 重试
+    - 第一次 HEDGE_AFTER_S 秒还没回来 → 不等它，马上再发一次，两个一起跑，谁先成功用谁（对冲请求）
+    - parse(resp)：把回复变成结果；抛 _BadOutput（内容不能用）= 这一次失败 → 接着等另一个在跑的请求，没有就马上重发
+    4xx（key 错、参数错）直接报错；429 记下来，别的都失败时报「太频繁」。"""
+    from concurrent.futures import FIRST_COMPLETED, wait
+
     from google.genai import errors
 
     client = _get_client()
-    last: Exception | None = None
-    for attempt in range(RETRIES + 1):
-        try:
-            return client.models.generate_content(
-                model=MODEL, contents=_contents(prompt, files), config=config
-            )
-        except errors.ClientError as e:  # 4xx：key 错、参数错、配额用完，重试没用（429 除外）
-            print(f"[gemini] client error {e.code}: {e}")
-            if e.code == 429:
+
+    def once():
+        return client.models.generate_content(model=MODEL, contents=_contents(prompt, files), config=config)
+
+    pool = _executor()
+    running = [pool.submit(once)]
+    sent, last = 1, None
+    deadline = time.monotonic() + TIMEOUT_S + max(HEDGE_AFTER_S, 1.0) + 2
+    while running:
+        can_hedge = sent <= RETRIES and HEDGE_AFTER_S > 0
+        timeout = HEDGE_AFTER_S if can_hedge else max(0.1, deadline - time.monotonic())
+        done, _ = wait(running, timeout=timeout, return_when=FIRST_COMPLETED)
+        if not done:
+            if can_hedge:
+                print(f"[gemini] 第 {sent} 次请求 {HEDGE_AFTER_S:.0f} s 还没回来 → 再发一次，谁先回来用谁", flush=True)
+                running.append(pool.submit(once))
+                sent += 1
+                continue
+            break  # 都超时了
+        bad_now = False
+        for f in done:
+            running.remove(f)
+            try:
+                resp = f.result()
+                out = parse(resp) if parse is not None else resp
+                if sent > 1:
+                    print(f"[gemini] 第 {sent} 次请求里有一个成功了", flush=True)
+                return out
+            except _BadOutput as e:  # 回了但不能用：接着等另一个 / 马上重发
+                print(f"[gemini] 返回内容不能用（{e}）→ {'等另一个请求' if running else '重发'}", flush=True)
+                last, bad_now = e, True
+            except errors.ClientError as e:  # 4xx：key 错、参数错、配额用完，重试没用（429 除外）
+                print(f"[gemini] client error {e.code}: {e}")
+                if e.code != 429:
+                    raise GeminiError(_CLIENT_ERRORS.get(e.code, f"Gemini 请求被拒绝（{e.code}）"), 502)
                 last = GeminiError("Gemini 调用太频繁 / 配额用完了，请稍后再试", 429)
-            else:
-                raise GeminiError(_CLIENT_ERRORS.get(e.code, f"Gemini 请求被拒绝（{e.code}）"), 502)
-        except Exception as e:  # 5xx、超时、网络问题 → 重试一次
-            print(f"[gemini] attempt {attempt + 1} failed: {type(e).__name__}: {e}")
-            last = e
-        if attempt < RETRIES:
-            time.sleep(1)
+            except Exception as e:  # 5xx、超时、网络问题
+                print(f"[gemini] attempt failed: {type(e).__name__}: {e}")
+                last = e
+        if not running and sent <= RETRIES:  # 都失败了、还能再发：内容不能用 → 马上重发；5xx / 网络 → 等 1 s
+            if not bad_now:
+                time.sleep(1)
+            running.append(pool.submit(once))
+            sent += 1
     if isinstance(last, GeminiError):
         raise last
+    if isinstance(last, _BadOutput):
+        raise GeminiError("AI 返回的格式不对，请重试", 502)
     raise GeminiError("AI 服务暂时不可用（超时或网络问题），请稍后再试", 504)
 
 
@@ -115,11 +188,18 @@ def generate_text(prompt: str, files: list[tuple[bytes, str]] | None = None) -> 
     if MOCK:
         extra = f"（附带 {len(files)} 个文件）" if files else ""
         return f"[MOCK] 这是假回复{extra}。你的输入是：{prompt[:200]}"
-    resp = _call(prompt, files)
-    text = (resp.text or "").strip()
-    if not text:
-        raise GeminiError("AI 没有返回内容（可能被安全过滤），换个说法试试", 502)
-    return text
+    def parse(resp):
+        text = (resp.text or "").strip()
+        if not text:
+            raise _BadOutput("空回复")
+        return text
+
+    try:
+        return _call(prompt, files, parse=parse)
+    except GeminiError as e:
+        if e.status == 502 and "格式" in e.message:
+            raise GeminiError("AI 没有返回内容（可能被安全过滤），换个说法试试", 502)
+        raise
 
 
 def generate_json(
@@ -140,14 +220,19 @@ def generate_json(
         response_mime_type="application/json",
         response_schema=schema,
         thinking_config=types.ThinkingConfig(thinking_level=thinking.upper()) if thinking else None,
+        max_output_tokens=output_cap(thinking),
     )
-    resp = _call(prompt, files, config)
-    if isinstance(resp.parsed, schema):
-        return resp.parsed
-    try:
-        return schema.model_validate(json.loads(resp.text or ""))
-    except Exception:
-        raise GeminiError("AI 返回的格式不对，请重试", 502)
+    def parse(resp):
+        if "MAX_TOKENS" in _finish_reason(resp):  # 写满上限：半截 JSON，或者卡在某个字段里无限重复
+            raise _BadOutput("写满输出上限 MAX_TOKENS")
+        if isinstance(resp.parsed, schema):
+            return resp.parsed
+        try:
+            return schema.model_validate(json.loads(resp.text or ""))
+        except Exception:
+            raise _BadOutput("JSON 解析不了")
+
+    return _call(prompt, files, config, parse=parse)
 
 
 def _mock_instance(schema: type[T]) -> T:

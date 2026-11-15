@@ -67,6 +67,7 @@
   "target_label": "柱形图",
   "box": [212, 455, 268, 512],
   "expect": "表格旁边出现一个柱状图",
+  "check": { "kind": "appears", "element_id": null, "label": null, "expect": "柱形图", "box": null },
   "next_guess": { "label": "二维", "instruction": "Click 2D in the chart menu.", "expect": "2D chart styles appear" },
   "element_id": null
 }
@@ -80,6 +81,20 @@
   - `target_label`：元素上能看到的文字（没有文字就写简短描述），客户端用来做 OCR 吸附
   - `next_guess`（可选，可能为 `null`）：预测**这一步点完之后**，下一步要点的元素。`label` 是那个元素上的原文（一定有文字），`instruction` / `expect` 同上。只在比较有把握时给。用法：画面一变，客户端先在新截图里用本地 OCR 找 `label`，找到就立刻画框、念 `instruction`；同时照常调 `/api/next-step` 核对，结果不一样再更正框和指令
   - `element_id`（`int | null`，默认 `null`）：选中的 `elements` 里的 `id`；`null` 表示框是 Gemini 自己给的坐标（没传 `elements`、目标不在列表里、或者模型给的编号对不上）。有值时 `box` 就是那个控件的 `box`（经过同样的取整 / 裁剪），`target_label` 是它的 `name`（`name` 为空时保留模型的描述），并且不做裁剪放大精修。只有 `status = "next"` 时可能有值
+  - `check`（`object | null`，默认 `null`）：**关键指标**——用户做完**这一步**之后屏幕上应该成立的事，客户端用辅助功能 / OCR 精确核对「这一步做完了」。格式：
+    ```
+    {"kind": "value_contains" | "appears" | "disappears" | "selected",
+     "element_id": int | null,   // 指标是 elements 里的控件时，它的 id
+     "label": str | null,        // 那个控件的名字（和 elements 里一字不差），或要找的可见文字
+     "expect": str | null,       // value_contains：做完后值 / 名字里应包含的文字（如 "11/16"、"14:00"），null = 有任何非空值就算
+                                 // appears / disappears：应出现 / 消失的元素或窗口上的文字（如 "新建事件"、"Following"）
+     "box": [ymin, xmin, ymax, xmax] | null   // 指标在屏幕上的位置（0–1000），辅助功能看不到时给 OCR 兜底
+    }
+    ```
+    指标常常不是要点的那个元素。例：「点日期选择器里的 11 月 16 日」→ `{"kind": "value_contains", "label": "开始日期", "expect": "11/16"}`；「点开始日期框」（弹出选择器）→ `{"kind": "appears", "expect": "十一月"}`；「点保存」→ `{"kind": "disappears", "expect": "新建事件"}`；「点 Follow」→ `{"kind": "appears", "expect": "Following"}`；「勾选 Remember me」→ `{"kind": "selected", "label": "Remember me"}`；「输入主题」→ `{"kind": "value_contains", "label": "Subject", "expect": null}`。
+    后端清洗：`kind` 不认识 → `check = null`；`element_id` 不在请求的 `elements` 里 → `element_id = null`（保留 `label`）；`element_id` 有效时，没给 `label` / `box` 就用那个控件的 `name` / `box` 补上；`box` 同样取整 / 修正顺序 / 裁到 0–1000，无效 → `null`；字符串去首尾空白，空 → `null`；`value_contains` / `appears` / `disappears` 至少要有 `label` 或 `expect` 之一，`selected` 必须有 `label`，否则 `check = null`；`status` 不是 `"next"` 时一定是 `null`。
+    这是所有软件通用的规则（编辑器、浏览器 / 网页应用、系统设置、媒体 App、对话框），不是某个 App 的特例。客户端每 1.5 秒核对一次，成立了就算用户这一步成功。
+    用法：`null` 或客户端核对不了时，退回原来的判断（点在框里 + 画面有变化）。模型没把握时会给 `null`（错的指标比没有更糟）
   - `situation`（`str | null`）：一句话，屏幕上现在是什么情况，用 `lang`（如 "Chrome opened the Google sign-in page; Gmail is not signed in."）
   - `reasoning`（`str | null`）：1–2 句短话，情况和目标的关系 / 为什么是这一步，用 `lang`（如 "Gmail needs you to sign in first; this is part of the task, not a wrong page."）。客户端可以发给 Agent：`[step] ... Situation: … Why: …`，用户问「为什么」时 Agent 用它回答
   - `plan`（`list[str] | null`）：剩下的步骤（包括这一步，第一项就是这一步），最多 8 条，每条最多 80 个字符，用 `lang`。下一次请求原样放进 `guide`。`status = "done"` 时为 `null`
@@ -89,7 +104,7 @@
   - `400` `{ "error": "screenshot 不是有效的图片" }`、`{ "error": "goal 不能为空" }`
   - `422` 缺字段
   - `429 / 502 / 504` Gemini 相关（同 `backend/app/gemini.py` 里的说明）
-- mock（`GEMINI_MOCK=1`）：按 `history` 长度依次返回 3 个固定步骤（框在屏幕中央附近），第 4 次返回 `done`；传了 `elements` 时，前 3 次改为返回第一个有 `name` 的控件（`element_id`、`box`、`target_label` 都取自它）；`status = "next"` 时 `situation` / `reasoning` / `plan` / `app` 也会填上 `[MOCK]` 假数据（`app` = `frontmost_app` 或 `app`）
+- mock（`GEMINI_MOCK=1`）：按 `history` 长度依次返回 3 个固定步骤（框在屏幕中央附近），第 4 次返回 `done`；传了 `elements` 时，前 3 次改为返回第一个有 `name` 的控件（`element_id`、`box`、`target_label` 都取自它），并返回 `check = {"kind": "value_contains", "element_id": 它的 id, "label": 它的 name, "expect": null, "box": 它的 box}`；没传 `elements` 时 `check` 为 `null`；`status = "next"` 时 `situation` / `reasoning` / `plan` / `app` 也会填上 `[MOCK]` 假数据（`app` = `frontmost_app` 或 `app`）
 
 ## `POST /api/chat`（对话模式）
 - 用途：用户在面板里用自然语言（打字或语音转文字）跟 ShowMe 对话：开始任务、中途提问、说做完 / 跳过 / 点错、换目标、停止。后端判断该怎么做（`action`），并给一句回复

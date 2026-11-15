@@ -168,8 +168,8 @@ def test_prompt_without_elements_unchanged():
     assert steps.build_prompt(NextStepIn(**kw)) == base
     assert steps.build_prompt(NextStepIn(**kw, elements=[])) == base
     p = steps.build_prompt(NextStepIn(**kw, elements=ELEMENTS))
-    assert p.startswith(base) and '#12 AXButton "New Tab" [40,950,62,966]' in p
-    assert "#13 AXTextField null [120,300,140,700]" in p and "{" not in p
+    assert p.startswith(base) and '- AXButton "New Tab" [40,950,62,966]' in p
+    assert "- AXTextField null [120,300,140,700]" in p and "{" not in p and "#12" not in p  # 不给编号
 
 
 def test_next_step_uses_element_and_skips_refine(monkeypatch):
@@ -184,7 +184,7 @@ def test_next_step_uses_element_and_skips_refine(monkeypatch):
     monkeypatch.setattr(steps, "REFINE", True)
     out = steps.next_step(NextStepIn(app="Chrome", goal="g", screenshot=TINY_PNG_B64, elements=ELEMENTS))
     assert out.element_id == 12 and out.box == [40, 950, 62, 966] and out.target_label == "New Tab"
-    assert calls == [NextStepOut]  # 没有调精修
+    assert calls == [steps.NextStepRaw]  # 没有调精修（主调用用的是编号写成字符串的格式）
 
 
 def test_mock_returns_first_named_element():
@@ -309,3 +309,125 @@ def test_mock_fills_reasoning_fields(client, monkeypatch):
     done = client.post("/api/next-step", json={"app": "a", "goal": "g", "screenshot": TINY_PNG_B64,
                                                "history": [{"instruction": "x", "ok": True}] * 3}).json()
     assert done["status"] == "done" and done["plan"] is None
+
+
+# ---------- check：这一步做完后的关键指标 ----------
+def _chk(**kw):
+    return steps.Check(**kw)
+
+
+def test_check_parses_and_defaults_to_none():
+    out = NextStepOut.model_validate({
+        "status": "next", "previous_ok": None, "instruction": "x", "target_label": "y", "box": [1, 2, 3, 4],
+        "expect": None, "check": {"kind": "value_contains", "element_id": 15, "label": "开始日期",
+                                  "expect": "11/16", "box": None}})
+    assert out.check.kind == "value_contains" and out.check.element_id == 15 and out.check.expect == "11/16"
+    assert _out().check is None and finalize(_out()).check is None
+    fields = list(NextStepOut.model_fields)
+    assert fields.index("check") > fields.index("expect") > fields.index("instruction")
+
+
+def test_check_unknown_kind_dropped():
+    assert finalize(_out(check=_chk(kind="changed", label="New Tab"))).check is None
+    assert finalize(_out(check=_chk(kind=" Appears ", expect="Following"))).check.kind == "appears"
+
+
+def test_check_unknown_element_id_keeps_label():
+    c = finalize(_out(check=_chk(kind="value_contains", element_id=99, label=" 开始日期 ", expect=" 11/16 ")),
+                 "zh", _els()).check
+    assert c.element_id is None and c.label == "开始日期" and c.expect == "11/16"
+    assert finalize(_out(check=_chk(kind="selected", element_id=12, label="x"))).check.element_id is None  # 无 elements
+
+
+def test_check_valid_element_fills_label_and_box():
+    c = finalize(_out(check=_chk(kind="value_contains", element_id=12)), "en", _els()).check
+    assert c.element_id == 12 and c.label == "New Tab" and c.box == [40, 950, 62, 966] and c.expect is None
+    c = finalize(_out(check=_chk(kind="value_contains", element_id=12, label="Tab name", box=[5, 5, 9, 9])),
+                 "en", _els()).check
+    assert c.label == "Tab name" and c.box == [5, 5, 9, 9]  # 模型给了就保留
+
+
+def test_check_box_normalized():
+    assert finalize(_out(check=_chk(kind="appears", expect="x", box=[600, 100, 500, 1200]))).check.box == \
+        [500, 100, 600, 1000]
+    assert finalize(_out(check=_chk(kind="appears", expect="x", box=[1, 2, 3]))).check.box is None
+
+
+def test_check_requires_label_or_expect():
+    for kind in ("value_contains", "appears", "disappears"):
+        assert finalize(_out(check=_chk(kind=kind, label=" ", expect=""))).check is None
+        assert finalize(_out(check=_chk(kind=kind, expect="Following"))).check is not None
+        assert finalize(_out(check=_chk(kind=kind, label="Subject"))).check is not None
+    assert finalize(_out(check=_chk(kind="selected", expect="Remember me"))).check is None
+    assert finalize(_out(check=_chk(kind="selected", label="Remember me"))).check.label == "Remember me"
+    assert finalize(_out(check=_chk(kind="selected", element_id=13)), "en", _els()).check is None  # 无名控件补不出 label
+
+
+def test_check_dropped_when_not_next():
+    c = _chk(kind="appears", expect="Following")
+    assert finalize(_out(status="done", box=None, check=c)).check is None
+    assert finalize(_out(box=None, check=c)).check is None  # next 没框 → unsure
+
+
+def test_next_step_keeps_check_element_on_own_box(monkeypatch):
+    monkeypatch.setattr(steps.gemini, "generate_json", lambda *a, **k: _out(
+        box=[300, 300, 320, 320], check=_chk(kind="value_contains", element_id=12, expect="x")))  # 框不在任何控件上
+    out = steps.next_step(NextStepIn(app="a", goal="g", screenshot=TINY_PNG_B64, elements=ELEMENTS))
+    assert out.element_id is None and out.check.element_id == 12 and out.check.label == "New Tab"
+
+
+def test_mock_returns_check(client, monkeypatch):
+    out = mock_next_step(NextStepIn(app="a", goal="g", screenshot=TINY_PNG_B64, elements=ELEMENTS))
+    assert out.check.kind == "value_contains" and out.check.element_id == 12 and out.check.label == "New Tab"
+    assert out.check.expect is None
+    monkeypatch.setattr(steps.gemini, "MOCK", True)
+    j = client.post("/api/next-step", json={"app": "a", "goal": "g", "screenshot": TINY_PNG_B64,
+                                            "elements": ELEMENTS}).json()
+    assert j["check"] == {"kind": "value_contains", "element_id": 12, "label": "New Tab", "expect": None,
+                          "box": [40, 950, 62, 966]}
+    j = client.post("/api/next-step", json={"app": "a", "goal": "g", "screenshot": TINY_PNG_B64}).json()
+    assert "check" in j and j["check"] is None
+
+
+def test_prompt_mentions_check():
+    p = steps.build_prompt(NextStepIn(app="a", goal="g", screenshot=TINY_PNG_B64))
+    assert "check" in p and "value_contains" in p and "disappears" in p and "selected" in p
+    assert "{" not in p
+    p = steps.build_prompt(NextStepIn(app="a", goal="g", screenshot=TINY_PNG_B64, elements=ELEMENTS))
+    assert "check 的指标控件如果在列表里" in p
+
+
+# ---- 编号写成字符串（整数 element_id 经常停不下来：1583095034…）----
+def test_gemini_schema_has_no_ids():
+    # 编号字段最容易停不下来（整数 1583095034…、字符串 "49Node49…"）：给 Gemini 的格式里干脆没有编号
+    assert "element_id" not in steps.NextStepRaw.model_fields
+    assert "element_id" not in steps.CheckRaw.model_fields
+    assert [f for f in NextStepOut.model_fields if f != "element_id"] == list(steps.NextStepRaw.model_fields)
+
+
+def test_match_element_by_exact_name_then_nearest_duplicate():
+    els = [steps.Element(id=1, role="AXButton", name="Save", box=[100, 100, 120, 150]),
+           steps.Element(id=2, role="AXButton", name="Save", box=[800, 800, 820, 850]),
+           steps.Element(id=3, role="AXButton", name="New Tab", box=[40, 950, 62, 966])]
+    assert steps.match_element(els, " new tab ", None).id == 3  # 不分大小写、去空白
+    assert steps.match_element(els, "Save", [795, 790, 825, 860]).id == 2  # 同名：取离模型的框最近的
+    assert steps.match_element(els, "Save", [95, 95, 125, 155]).id == 1
+
+
+def test_match_element_by_overlap_when_name_differs():
+    els = [steps.Element(id=13, role="AXTextField", name=None, box=[120, 300, 140, 700])]
+    assert steps.match_element(els, "Search box", [118, 305, 142, 690]).id == 13  # 名字对不上，但框几乎重合
+    assert steps.match_element(els, "Search box", [500, 500, 520, 520]) is None  # 不重合：用模型自己的框
+    assert steps.match_element([], "x", [1, 2, 3, 4]) is None
+
+
+def test_from_raw_fills_ids_from_matching():
+    els = [steps.Element(id=12, role="AXButton", name="New Tab", box=[40, 950, 62, 966]),
+           steps.Element(id=30, role="AXStaticText", name="New Message", box=[200, 600, 220, 800])]
+    raw = steps.NextStepRaw(status="next", previous_ok=None, instruction="Click New Tab", target_label="New Tab",
+                            box=[41, 949, 63, 967], expect=None,
+                            check=steps.CheckRaw(kind="appears", label="New Message"))
+    out = steps.from_raw(raw, els)
+    assert type(out) is NextStepOut and out.element_id == 12 and out.check.element_id == 30
+    raw.status = "done"
+    assert steps.from_raw(raw, els).element_id is None

@@ -62,6 +62,14 @@ CLICK_SETTLE_MAX_S = 0.8
 # 第一张截早了）→ 用最新画面重新问一次。期间用户又点 / 按键 / 说话就不复查。每步最多一次
 RECHECK_AFTER_S = 1.5
 RECHECK_MIN_GAP_S = 0.4  # 正式截图之后至少再过这么久才复查
+# 复查判断「变没变」比轮询灵敏：深色模式里弹窗开 / 关的亮度差很小（日志 diff=0.0039 < 0.004 被当成没变）
+RECHECK_PIXEL_DELTA = 0.03  # 一个像素亮度变化超过这个值就算变了（轮询用 PIXEL_DELTA 0.08）
+RECHECK_CHANGE = 0.003  # 变了的像素超过这个比例 = 画面变了
+RECHECK_AX_MIN = 3  # 或者：控件清单（角色 + 名字）至少这么多个不同……
+RECHECK_AX_RATIO = 0.05  # ……而且占总数这么多以上
+# 关键指标检查（keycheck.py，对所有 App 通用）：框显示着（WAITING）时每 KEYCHECK_INTERVAL_S 秒读一次这一步的 check；
+# 用户点 / 按键后从那一刻重新计时（第一次在操作后 1.5 s）。成立 = 操作成功 → 这一步完成；不成立 = 还没生效 → 框留着
+KEYCHECK_INTERVAL_S = 1.5
 NEAR_CLICK_PT = 40  # 点在框外但离框不超过这么多逻辑点：也算完成（框画偏了；点错了下一步 Gemini 会纠正）
 HIGHLIGHT_COLOR = "#FF2D78"  # 框和光晕的颜色
 BORDER_WIDTH = 4  # 实线边框粗细

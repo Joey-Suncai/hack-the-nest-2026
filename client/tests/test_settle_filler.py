@@ -172,8 +172,9 @@ def _signals(monkeypatch, kind, inputs_ok=True, fired=True):
                               detector=types.SimpleNamespace(feed=lambda f: fired, reset=lambda f: None))
     c._step_completed = lambda reason, detail=None: done.append(reason)
     c._down = None
+    c.task, c._token, c.history = {"goal": "x"}, 0, []
     for name in ("_on_click", "_on_mouse_down", "_on_mouse_up", "_click_completes", "_on_key", "_on_poll",
-                 "_screen_only_backup", "_cancel_recheck"):
+                 "_screen_only_backup", "_cancel_recheck", "_schedule_miss_recheck", "_miss_recheck_tick", "_user_acted", "_ax_now_vs_req"):
         setattr(c, name, types.MethodType(getattr(Controller, name), c))
     return c, done
 
@@ -402,8 +403,9 @@ def _recheck_ctl(monkeypatch, frames):
                               overlay=types.SimpleNamespace(clear=lambda: log.append("clear")),
                               narrator=types.SimpleNamespace(stop=lambda: log.append("hush")))
     c._request = lambda img=None, front=None: requests.append((img, front, c._confirmed, c.expect))
-    for name in ("_schedule_recheck", "_cancel_recheck", "_recheck_tick"):
+    for name in ("_schedule_recheck", "_cancel_recheck", "_recheck_tick", "_ax_now_vs_req"):
         setattr(c, name, types.MethodType(getattr(Controller, name), c))
+    c._recheck_numbers = Controller._recheck_numbers
     return c, timers, requests, log
 
 
@@ -447,3 +449,118 @@ def test_recheck_cancelled_by_new_user_action_or_next_step(monkeypatch):
     c.history.append(3)  # 已经进到下一步
     timers[1][1]()
     assert requests == []
+
+
+def test_recheck_still_runs_while_gemini_is_thinking(monkeypatch, capsys):
+    # 真实情况：1.5 s 时 Gemini 还没回来，state=REQUESTING、_step_done 仍是上一步的 True。以前这里直接跳过
+    c, timers, requests, _ = _recheck_ctl(monkeypatch, [0.6])
+    c._step_done = True
+    c._schedule_recheck("req", None, "old")
+    timers[0][1]()
+    assert len(requests) == 1 and "又变了" in capsys.readouterr().out
+
+
+def _miss_ctl(monkeypatch, frame):
+    c, done = _mouse(monkeypatch)
+    timers = []
+    monkeypatch.setattr(ctl.QTimer, "singleShot", staticmethod(lambda ms, fn: timers.append((ms, fn))))
+    monkeypatch.setattr(capture, "grab", lambda: "now")
+    monkeypatch.setattr(capture, "to_small_gray", lambda img: np.full((64, 64), frame, np.float32))
+    c.task, c._token, c.history, c._recheck = {"goal": "x"}, 1, [], None
+    c._last_raw = np.zeros((64, 64), np.float32)  # 点之前的画面
+    for name in ("_schedule_miss_recheck", "_miss_recheck_tick", "_ax_now_vs_req"):
+        setattr(c, name, types.MethodType(getattr(Controller, name), c))
+    c._recheck_numbers = Controller._recheck_numbers
+    return c, done, timers
+
+
+def test_miss_keeps_box_and_rechecks_unchanged_screen(monkeypatch, capsys):
+    c, done, timers = _miss_ctl(monkeypatch, 0.0)
+    c._on_mouse_down(400, 600)
+    c._on_mouse_up(400, 600)  # 点在框外
+    assert c.overlay._rect is not None and c.overlay.calls == ["suspend", "resume"]  # 框画回来、保持
+    (ms, fn), = timers
+    assert abs(ms - ctl.RECHECK_AFTER_S * 1000) < 1
+    fn()
+    assert done == [] and c.overlay._rect is not None and "画面没变" in capsys.readouterr().out
+
+
+def test_miss_with_screen_change_asks_again(monkeypatch, capsys):
+    c, done, timers = _miss_ctl(monkeypatch, 0.6)
+    c._on_mouse_down(400, 600)
+    c._on_mouse_up(400, 600)
+    timers[0][1]()
+    assert done == ["click_changed"] and c.overlay._rect is not None  # 重新看；框留着，直到新的一步出来
+    assert "画面变了" in capsys.readouterr().out
+
+
+def test_miss_recheck_cancelled_by_next_click(monkeypatch):
+    c, done, timers = _miss_ctl(monkeypatch, 0.6)
+    c._on_mouse_down(400, 600)
+    c._on_mouse_up(400, 600)
+    c._on_mouse_down(120, 210)  # 1.5 s 内又点了一下（点中了框）
+    c._on_mouse_up(120, 210)
+    timers[0][1]()
+    assert done == ["click"]  # 复查作废，只算这一次点中
+
+
+def test_user_acting_while_gemini_thinks_rechecks_and_reasks(monkeypatch, capsys):
+    # 日志里的真实情况：Gemini 4.4 s 才回来，用户已经自己选好了日期；旧结果的框画在已经关掉的弹窗上
+    c, timers, requests, log = _recheck_ctl(monkeypatch, [0.6])
+    c._req_img, c._req_expect, c._recheck = "req", "date picker opens", None
+    c._user_acted = types.MethodType(Controller._user_acted, c)
+    c._user_acted()  # REQUESTING 时点了鼠标
+    (ms, fn), = timers
+    assert abs(ms - ctl.RECHECK_AFTER_S * 1000) < 1 and "等 Gemini 时用户操作了" in capsys.readouterr().out
+    c.state = ctl.WAITING  # 按旧画面算的那一步回来、已经显示了
+    fn()
+    assert log == ["clear", "hush"]  # 撤掉旧框
+    assert requests == [(0.6, "Zoom", None, "date picker opens")]  # 用最新画面重新问
+
+
+def test_user_acting_when_not_waiting_for_gemini_cancels_recheck(monkeypatch):
+    c, timers, requests, _ = _recheck_ctl(monkeypatch, [0.6])
+    c._schedule_recheck("req", None, "old")
+    c.state = ctl.WAITING
+    c._user_acted = types.MethodType(Controller._user_acted, c)
+    c._user_acted()  # 框已经出来了，用户在做这一步：交给点击逻辑
+    timers[0][1]()
+    assert requests == [] and len(timers) == 1
+
+
+# ---- 复查的「变没变」：深色模式 + 控件清单 ----
+from showme.change import _diff as _poll_diff, ax_changed, ax_signature, fine_diff  # noqa: E402
+
+
+def _els(n, prefix="cell"):
+    return [{"id": i + 1, "role": "AXButton", "name": f"{prefix} {i}", "box": [0, 0, 1, 1]} for i in range(n)]
+
+
+def test_fine_diff_sees_dark_mode_popup_that_polling_misses():
+    a = np.zeros((64, 64), np.float32)
+    b = a.copy()
+    b.flat[:25] = 0.05  # 深灰弹窗没了：亮度只差 0.05，约 0.6% 的像素
+    assert _poll_diff(a, b) == 0.0  # 轮询的门槛看不出来（日志：diff=0.0039 被当成没变）
+    from showme.config import RECHECK_CHANGE
+    assert fine_diff(a, b) > RECHECK_CHANGE
+
+
+def test_ax_signature_change_detects_popup_close_and_ignores_noise():
+    popup_open = ax_signature(_els(68, "main") + _els(135, "day"))  # 日历弹窗开着：203 个
+    popup_closed = ax_signature(_els(68, "main"))
+    assert ax_changed(popup_open, popup_closed)
+    assert not ax_changed(popup_closed, popup_closed)
+    one_more = ax_signature(_els(68, "main") + [{"role": "AXButton", "name": "tooltip"}])
+    assert not ax_changed(popup_closed, one_more)  # 只多一个（悬停提示）：不算
+    assert not ax_changed(None, popup_closed) and not ax_changed(popup_closed, frozenset())
+
+
+def test_recheck_uses_controls_when_pixels_barely_change(monkeypatch, capsys):
+    c, timers, requests, _ = _recheck_ctl(monkeypatch, [0.0])  # 截图几乎没变
+    c._screen_wh = (1470, 956)
+    c._req_ax = ("Zoom", ax_signature(_els(68, "main") + _els(135, "day")))  # 请求时弹窗开着
+    monkeypatch.setattr(ctl.ax_tree, "collect", lambda app, wh=None, log=True: _els(68, "main"))  # 现在关了
+    c._schedule_recheck("req", None, "old")
+    timers[0][1]()
+    out = capsys.readouterr().out
+    assert len(requests) == 1 and "又变了" in out and "203→68" in out

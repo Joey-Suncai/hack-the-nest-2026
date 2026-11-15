@@ -18,6 +18,7 @@ WAITING: 每 POLL_S 秒截图（不隐藏高亮层，遮掉框和面板）→ �
 
 import json
 import re
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -25,9 +26,9 @@ from pathlib import Path
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
-from showme import api, apps, ax_snap, ax_tree, capture, enroll, ocr, reasoning, sync, wording
-from showme.change import ChangeDetector, _diff, mask_rects
-from showme.config import (AX_ELEMENTS, CHANGE_THRESHOLD, CLICK_EXTRA_PAD, CLICK_SETTLE_MAX_S, DEBUG_DETECT, HIGHLIGHT_PAD, LOG, MIC_MAX_S, POLL_S,
+from showme import api, apps, ax_snap, ax_tree, capture, enroll, keycheck, ocr, reasoning, sync, wording
+from showme.change import ChangeDetector, _diff, ax_signature, fine_diff, mask_rects, screen_changed
+from showme.config import (AX_ELEMENTS, CHANGE_THRESHOLD, CLICK_EXTRA_PAD, CLICK_SETTLE_MAX_S, DEBUG_DETECT, HIGHLIGHT_PAD, KEYCHECK_INTERVAL_S, LOG, MIC_MAX_S, POLL_S,
                            RECHECK_AFTER_S, RECHECK_MIN_GAP_S, SETTLE_MAX_S, SETTLE_MIN_S, SETTLE_NOCHANGE_MAX_S, SETTLE_POLL_S, TALK_MAX_S)
 from showme.coords import box_to_rect, expand, same_target
 from showme.i18n import t
@@ -133,6 +134,10 @@ class Controller(QObject):
         self._typed_keys = 0  # 打字步骤：这个框出来之后按过几次键（只计数，不记内容）
         self._win_title: str | None = None  # 上一次请求时目标 App 聚焦窗口的标题（判断「弹出了新窗口」）
         self._req_ax_app: str | None = None
+        # 关键指标检查（keycheck.py）：当前这一步的 check 和它的基准快照；发请求时读的全量 AX 快照
+        self._check: dict | None = None
+        self._req_state = None
+        self._acted_in_req = False  # 等 Gemini 时用户点过 / 按过键（结果回来时可能已经过时）
         # 每一步只认一个主信号（step_kind）：click = 点在框里；type = 回车；key = 有按键。用户说 done → Agent 带 note 调 tool。
         # 画面变化只在两种情况下算：没有辅助功能权限（监听不到点击 / 按键）、或者没有框（unsure 之后等用户自己弄好）；
         # 点击按 mouse up 算：按下时框先藏起来；按下和松开都在框里才算完成，否则松开时框画回来。
@@ -340,6 +345,7 @@ class Controller(QObject):
         self.task = {"app": app, "goal": goal}
         self.history, self.expect, self.current, self.last_instruction = [], None, None, None
         self._confirmed, self._last_result, self._recent, self._prev_front, self._typed_keys = None, None, [], None, 0
+        self._check = None
         self.guide = outline or None
         self._guide_is_plan = False
         self._n_req = 0
@@ -355,6 +361,7 @@ class Controller(QObject):
         self.poll.stop()
         self.overlay.clear()
         self.task, self.current, self.last_instruction = None, None, None
+        self._check = None
         self.state = IDLE
         self.panel.set_running(False)
         self.panel.set_status(status)
@@ -441,6 +448,7 @@ class Controller(QObject):
                 self._on_error(api.ApiError(t("capture_failed", e=e)))
                 return
         self._req_img = img
+        self._req_expect = self.expect  # 复查重问时用发这次请求时的 expect
         self._n_req += 1
         payload = {
             "app": self.task["app"],
@@ -454,6 +462,7 @@ class Controller(QObject):
         if user_note:  # 只有 /api/chat 返回 advance 时才带
             payload["user_note"] = user_note
         ax_app = self._next_fields(payload, user_note)
+        self._check_req_snapshot(ax_app)
         t0 = time.time()
 
         def call():
@@ -481,6 +490,11 @@ class Controller(QObject):
                 payload["app_switched_from"] = sw
                 print(f"[app] switched {sw} → {front}", flush=True)
             conf, self._confirmed = self._confirmed, None
+            ctx = getattr(self, "_check", None)
+            self._conf_check = None
+            if ctx is not None and isinstance(conf, dict):  # 点在框里也带上关键指标的状态，让 Gemini 判断（不挡完成）
+                self._conf_check = Controller._check_probe_for_request(self, ctx, conf)
+            self._req_confirmed = conf  # 关键指标说结果过时了、重问时照样带上
             if conf:
                 payload["confirmed"] = conf
             if reasoning.want_deep(self.history, sw, self._last_result, user_note, self._recent):
@@ -498,8 +512,10 @@ class Controller(QObject):
         conf = payload.get("confirmed")
         if AX_ELEMENTS:
             info = ax_tree.focus_info(app)
-            if isinstance(conf, dict):
-                conf["detail"] = ax_tree.focus_detail(info, self._win_title)
+            if isinstance(conf, dict):  # 关键指标的状态在前，焦点 / 新窗口接在后面
+                Controller._check_detail(self, conf)
+                conf["detail"] = "; ".join(
+                    x for x in (conf.get("detail"), ax_tree.focus_detail(info, self._win_title)) if x) or None
             if info:
                 self._win_title = info[2]
         if isinstance(conf, dict):
@@ -508,6 +524,8 @@ class Controller(QObject):
         if not AX_ELEMENTS:
             return
         els = ax_tree.collect(app, self._screen_wh)
+        self._req_els = els  # check.element_id 指的是这里面的 id
+        self._req_ax = (app, ax_signature(els))  # 复查时和现在的控件比：弹窗开 / 关、选中状态变了都看得出来
         if els:
             payload["elements"] = els
 
@@ -598,9 +616,11 @@ class Controller(QObject):
         self.panel.set_status("")
         prov, self._provisional = self._provisional, None
         self._guess = r.get("next_guess") if status == "next" else None
+        self._check = None  # 新的一步 / done / unsure：上一步的 check 作废
         if status == "next" and r.get("box"):
             self.current = r
             self.expect = r.get("expect")
+            self._check_begin(r)
             if prov and same_target(prov["box"], r["box"]):
                 # OCR 秒出的框是对的：框不动，只补上 Gemini 的 expect 等信息
                 print(f"[speed] Gemini 核对：和 OCR 框一致（Gemini 用了 {(time.perf_counter() - self._t_change) * 1000:.0f} ms）", flush=True)
@@ -737,6 +757,10 @@ class Controller(QObject):
             return
         if self._step_done:
             return
+        ctx = getattr(self, "_check", None)
+        if ctx is not None and time.monotonic() >= ctx.get("next_t", 0.0):  # 每 1.5 s 看一次这一步的关键指标
+            ctx["next_t"] = time.monotonic() + KEYCHECK_INTERVAL_S
+            self._check_eval(ctx, "tick")
         try:
             raw = capture.to_small_gray(capture.grab())
         except Exception as e:  # noqa: BLE001
@@ -782,14 +806,15 @@ class Controller(QObject):
         self._done_mono = time.monotonic()  # 用户做完的时刻（点击 = 松开）：复查从这里算 RECHECK_AFTER_S
         print(f"[step] 完成（{reason}{'/' + detail if detail else ''}）：{self.last_instruction!r}", flush=True)
         # 点在框里 / 打完字点别处或按 Tab / 回车：客户端确认做完了 → 下一次请求带 confirmed，后端不会因为画面没怎么变就让再做一遍
-        self._confirmed = reasoning.confirmed(reason, (getattr(self, "current", None) or {}).get("target_label"))
+        self._confirmed = reasoning.confirmed(reason, (getattr(self, "current", None) or {}).get("target_label"),
+                                              detail if reason == "check" else None)
         # 确认过的点击 / 打字：画面没变最多等 CLICK_SETTLE_MAX_S；只有画面变化（和回车：常常要加载）还等慢窗口
-        nochange_max = CLICK_SETTLE_MAX_S if reason in ("click", "typing") else SETTLE_NOCHANGE_MAX_S
+        nochange_max = CLICK_SETTLE_MAX_S if reason in ("click", "typing", "check") else SETTLE_NOCHANGE_MAX_S
         # 不马上截图：菜单还在弹、窗口还在加载时截到旧画面，Gemini 会以为用户没点，又让点同一个（日志里 22 处）
         # 不管哪种信号，都从新的一帧开始比、至少等 SETTLE_MIN_S（画面变化触发那一帧不能当「稳定」的起点）
         # 先等画面「变了」（和做之前那一帧比），再等它稳定：网页点完要过一会儿才开始变，太早截到的还是旧画面
         self._settle = {"t0": time.monotonic(), "reason": reason, "n": 0, "min": SETTLE_MIN_S, "prev": None,
-                        "base": self._last_raw, "changed": self._last_raw is None or reason == "screen_change",  # 画面变化触发：已经变了
+                        "base": self._last_raw, "changed": self._last_raw is None or reason in ("screen_change", "check"),  # 画面变化触发：已经变了
                         "t_changed": 0.0, "nochange_max": nochange_max}
         self.poll.setInterval(int(SETTLE_POLL_S * 1000))
         if not self.poll.isActive():
@@ -833,13 +858,14 @@ class Controller(QObject):
     def _on_mouse_down(self, x: float, y: float):
         """全局左键按下（用户点的是别的 App）：记下位置和当时的框，框马上藏起来。
         OCR 秒出的框在 Gemini 核对回来之前也能点。"""
-        self._cancel_recheck()  # 用户又点了：之后的画面变化是这次点击造成的
+        self._user_acted()  # 等 Gemini 时点了：结果可能已经过时 → 复查；否则之后的变化是这次点击造成的，不复查
         self._down = None
         prov = self.state == REQUESTING and self._provisional is not None
         if (self.state != WAITING and not prov) or self._step_done or self.overlay._rect is None:
             return
         r = self.overlay._rect
         self._down = (x, y, (r.x(), r.y(), r.width(), r.height()))
+        self._down_raw = getattr(self, "_last_raw", None)  # 点之前的画面（轮询的最新一帧）：点偏了时用来复查
         suspend = getattr(self.overlay, "suspend", None)
         if suspend is not None:
             suspend()
@@ -847,6 +873,8 @@ class Controller(QObject):
     def _on_mouse_up(self, x: float, y: float):
         """全局左键松开：按下和松开都在框里 = 这一步完成（从松开时开始等画面）。
         没点中（点在框外、拖出框外取消）→ 框画回来，这一步不算完成，之后截到的画面也不会被误当成「做完了」。"""
+        if getattr(self, "_check", None) is not None:
+            self._check_after_action()
         down, self._down = getattr(self, "_down", None), None
         if down is None:
             return
@@ -855,6 +883,7 @@ class Controller(QObject):
             resume = getattr(self.overlay, "resume", None)
             if resume is not None:
                 resume()
+            self._schedule_miss_recheck()  # 点在框外也在 1.5 s 后看一眼：也许点对了地方（框偏了），也许点开了别的
 
     def _click_completes(self, down_pt, up_pt, rect) -> bool:
         prov = self.state == REQUESTING and self._provisional is not None
@@ -884,6 +913,7 @@ class Controller(QObject):
         self._token += 1  # 丢掉核对结果
         self.current = {"instruction": prov["instruction"], "box": prov["box"]}
         self.expect = None
+        self._check = None
         t_change = self._t_change
         self._wait()
         self._t_change = t_change
@@ -896,7 +926,9 @@ class Controller(QObject):
     def _on_key(self, is_return: bool, is_tab: bool = False):
         """全局按键：只看是不是回车 / Tab，不记内容。打字步骤：回车 = enter，打过字再按 Tab = typing，
         其它键只计数；快捷键步骤有按键就算。"""
-        self._cancel_recheck()  # 用户在打字：之后的画面变化是打字造成的
+        self._user_acted()  # 同上：等 Gemini 时打字也会让结果过时
+        if getattr(self, "_check", None) is not None:
+            self._check_after_action()
         prov = self.state == REQUESTING and self._provisional is not None and self.overlay._rect is not None
         if (self.state != WAITING and not prov) or self._step_done:
             return
@@ -982,24 +1014,109 @@ class Controller(QObject):
         """用户又点了 / 按了键 / 说了话：之后画面的变化是新的操作造成的，不复查。"""
         self._recheck = None
 
+    def _user_acted(self):
+        """用户点了鼠标 / 按了键。
+        - 正在等 Gemini（REQUESTING）：用户已经自己往下做了（日志：Gemini 4.4 s 才回来，用户早就选好了日期，
+          框却画在已经关掉的日历弹窗上）→ 从这次操作起 RECHECK_AFTER_S 秒后，用发给 Gemini 的那张截图比一次，
+          变了就丢掉 / 撤掉旧结果、用最新画面重新问
+        - 其它时候：之后的画面变化是这次操作造成的 → 取消复查（这一步的点击 / 打字逻辑自己会处理）"""
+        if self.state != REQUESTING or self.task is None or getattr(self, "_req_img", None) is None:
+            self._cancel_recheck()
+            return
+        self._acted_in_req = True
+        prev = getattr(self, "_recheck", None)
+        if not (prev and prev.get("action")):
+            print(f"[recheck] 等 Gemini 时用户操作了：{RECHECK_AFTER_S:.1f} s 后再看一次画面", flush=True)
+        rc = {"img": self._req_img, "token": self._token, "hist": len(self.history), "confirmed": None,
+              "expect": getattr(self, "_req_expect", None), "action": True}
+        self._recheck = rc  # 连续操作：只有最后一次的计时有效
+        QTimer.singleShot(int(RECHECK_AFTER_S * 1000), lambda: self._recheck_tick(rc))
+
+    def _schedule_miss_recheck(self):
+        """点在框外（框画回来了）：松开后 RECHECK_AFTER_S 秒和点之前的画面比。变了 = 用户确实做了点什么
+        （点对了地方但框偏了 / 点开了别的）→ 用最新画面重新看，做对没做对交给 Gemini 判断；没变 → 继续等。"""
+        base = getattr(self, "_down_raw", None)
+        if self.state != WAITING or self.task is None or base is None:
+            return
+        rc = {"base": base, "token": self._token, "hist": len(self.history)}
+        self._recheck = rc
+        QTimer.singleShot(int(RECHECK_AFTER_S * 1000), lambda: self._miss_recheck_tick(rc))
+
+    def _miss_recheck_tick(self, rc):
+        if getattr(self, "_recheck", None) is not rc:
+            return
+        self._recheck = None
+        if self.task is None or self.state != WAITING or self._token != rc["token"] \
+                or len(self.history) != rc["hist"] or getattr(self, "_step_done", False):
+            return
+        try:
+            self._grow_masks()
+            d = fine_diff(self._masked(capture.to_small_gray(capture.grab())), rc["base"])
+        except Exception as e:  # noqa: BLE001
+            dbg(f"[recheck] 截图失败：{e}")
+            return
+        before, after = self._ax_now_vs_req()
+        how = self._recheck_numbers(d, before, after)
+        ctx = getattr(self, "_check", None)
+        met = ctx.get("last_desc") if ctx and ctx.get("last") == keycheck.MET else None
+        if met:  # 关键指标成立了：用户点对了地方（框偏了），确认做完
+            print(f"[recheck] 点在框外，但关键指标成立了（{met}）", flush=True)
+            self._last_raw = rc["base"]
+            self._step_completed("check", f"check met: {met}")
+            return
+        if not screen_changed(d, before, after):
+            print(f"[recheck] 点在框外，{RECHECK_AFTER_S:.1f} s 后画面没变（{how}）：继续等你点框", flush=True)
+            return
+        print(f"[recheck] 点在框外，但 {RECHECK_AFTER_S:.1f} s 后画面变了（{how}）→ 用最新画面重新看", flush=True)
+        self._last_raw = rc["base"]  # 等画面稳定时，用点之前那一帧当基准
+        self._step_completed("click_changed")
+
+    def _ax_now_vs_req(self):
+        """复查用：发请求时读到的控件指纹 vs 现在的。AX 关着 / 读不到 → (None, None)，只看截图。"""
+        req = getattr(self, "_req_ax", None)
+        if not AX_ELEMENTS or not req:
+            return None, None
+        app, before = req
+        try:
+            after = ax_signature(ax_tree.collect(app, self._screen_wh, log=False))
+        except Exception:  # noqa: BLE001
+            after = None
+        return before, after
+
+    @staticmethod
+    def _recheck_numbers(d, before, after) -> str:
+        ax = f"，控件 {len(before)}→{len(after)} 个、{len(before ^ after)} 个不同" if before and after else ""
+        return f"diff={d:.4f}{ax}"
+
     def _recheck_tick(self, rc):
         if getattr(self, "_recheck", None) is not rc:
             return  # 已经作废（用户又操作了 / 换了一步）
         self._recheck = None
+        # _step_done 只在 WAITING 时才表示「用户已经做完了新显示的那一步」：REQUESTING 时它还是上一步的
+        # 「已完成」（Gemini 通常 1.5 s 时还没回来）。以前不分状态就跳过，结果复查一次都没跑（日志 0 行 [recheck]）
+        busy = self.state == WAITING and getattr(self, "_step_done", False)
         if self.task is None or self.state not in (REQUESTING, WAITING) or self._token != rc["token"] \
-                or len(self.history) != rc["hist"] or getattr(self, "_step_done", False):
+                or len(self.history) != rc["hist"] or busy:
+            print("[recheck] 跳过：已经停止 / 换了任务 / 进到下一步了", flush=True)
             return  # 停止了、用户说了话、已经进到下一步，或者用户已经在做下一步
         try:
             now = capture.grab()
             self._grow_masks()
-            d = _diff(self._masked(capture.to_small_gray(now)), self._masked(capture.to_small_gray(rc["img"])))
+            d = fine_diff(self._masked(capture.to_small_gray(now)), self._masked(capture.to_small_gray(rc["img"])))
         except Exception as e:  # noqa: BLE001  复查失败不影响主流程
             dbg(f"[recheck] 截图失败：{e}")
             return
-        if d <= CHANGE_THRESHOLD:
-            print(f"[recheck] {RECHECK_AFTER_S:.1f} s 后画面没变（diff={d:.4f}）：刚才那张就是最新的", flush=True)
+        before, after = self._ax_now_vs_req()
+        how = self._recheck_numbers(d, before, after)
+        met = rc.get("check")  # 关键指标成立了 = 变了（深色模式里像素差太小也看得出）
+        if met:
+            how += f"，关键指标：{met}"
+        if not met and not screen_changed(d, before, after):
+            print(f"[recheck] {RECHECK_AFTER_S:.1f} s 后画面没变（{how}）：刚才那张就是最新的", flush=True)
+            if getattr(self, "_check", None) is not None:
+                self._check_recheck(rc)  # 再看一眼关键指标
             return
-        print(f"[recheck] 截图之后画面又变了（diff={d:.4f}）：第一张截早了 → 用最新画面重新问", flush=True)
+        print(f"[recheck] 截图之后画面又变了（{how}）：第一张截早了 → 用最新画面重新问", flush=True)
         self._token += 1  # 丢掉按旧画面算的结果（还没回来的那个）
         self._provisional = None
         if self.state == WAITING:  # 旧结果已经显示了：撤掉它
@@ -1008,6 +1125,179 @@ class Controller(QObject):
         self.expect = rc["expect"]
         self._confirmed = rc["confirmed"]  # 用户确实做了上一步：重问时照样告诉后端
         self._request(img=now, front=apps.frontmost_app())
+
+    # ================= 关键指标检查：check 说的那件事成立了没有（keycheck.py）=================
+    def _check_req_snapshot(self, ax_app):
+        """主线程，发请求时：后台读一张全量 AX 快照（名字 / 值 / 选中）= Gemini 看到的那一刻。
+        结果里的 check 用它当基准：用户在等 Gemini 时已经做了，也比得出来。"""
+        self._req_state = None
+        self._acted_in_req = False
+        if not AX_ELEMENTS:
+            return
+        n = self._n_req
+
+        def ok(snap):
+            if self._n_req == n:
+                self._req_state = snap
+
+        self._bg_free(lambda: keycheck.read_state(ax_app, None, self._screen_wh), ok, lambda e: None)
+
+    def _check_begin(self, r: dict):
+        """_on_result 出了新的一步：记下 check，后台马上取基准（能用 AX 就用 AX，否则框里 OCR）。"""
+        c = keycheck.parse(r.get("check"))
+        if c is None or self.task is None:
+            return
+        if c["element_id"] is not None:  # 后端给了控件 id：名字 / 框缺的从发出去的控件清单里补
+            el = next((e for e in (getattr(self, "_req_els", None) or []) if e.get("id") == c["element_id"]), None)
+            if el:
+                c["label"] = c["label"] or el.get("name")
+                c["box"] = c["box"] or el.get("box")
+        app = getattr(self, "_req_ax_app", None) if getattr(self, "_result_source", None) == "tool" else None
+        app = app or reasoning.ax_app(getattr(self, "_prev_front", None), self.task.get("app"))
+        now = time.monotonic()
+        ctx = {"check": c, "step": len(self.history) + 1, "app": app, "base": None, "src": None, "ready": False,
+               "busy": False, "dead": False, "last": None, "last_t": 0.0, "last_desc": "", "acts": 0, "acted_t": None,
+               "t_shown": now, "acted_req": bool(getattr(self, "_acted_in_req", False)), "next_t": now + KEYCHECK_INTERVAL_S}
+        self._check = ctx
+        req, wh = getattr(self, "_req_state", None), self._screen_wh
+        self._bg_free(lambda: keycheck.baseline(c, app, wh, req), lambda res: self._check_based(ctx, res),
+                      lambda e: print(f"[check] 取基准失败：{_msg(e)}", flush=True))
+
+    def _check_based(self, ctx: dict, res):
+        if self._check is not ctx:
+            return
+        base, src = res
+        c = ctx["check"]
+        if src is None:
+            ctx["dead"] = True
+            print(f"[check] step {ctx['step']}: {keycheck.summary(c)} → unknown (control not found, no box)", flush=True)
+            return
+        ctx.update(base=base, src=src, ready=True)
+        print(f"[check] step {ctx['step']}: {keycheck.summary(c)} (baseline {keycheck.describe(c, base)!r}, {src})",
+              flush=True)
+        if keycheck.evaluate(c, base, base) == keycheck.MET:  # 出框之前就已经成立：这个 check 说明不了什么
+            ctx["dead"] = True
+            print("[check] 基准里就已经成立 → 不用它", flush=True)
+            return
+        self._check_eval(ctx, "shown")  # 用户可能在等 Gemini 时就做完了
+
+    def _check_after_action(self):
+        """mouse up / 按键（WAITING）：1.5 s 的计时从这次操作重新开始，第一次检查在操作后 1.5 s。"""
+        ctx = self._check
+        if ctx is None or self.state != WAITING:
+            return
+        ctx["acts"] += 1
+        ctx["acted_t"] = time.monotonic()
+        ctx["next_t"] = ctx["acted_t"] + KEYCHECK_INTERVAL_S  # _on_poll 到点就读
+
+    def _check_eval(self, ctx: dict, why: str, rc: dict | None = None):
+        """后台读一次快照、判断，结果回主线程（_check_done）。同一时间只读一个。rc：复查时调的。"""
+        if self._check is not ctx or not ctx["ready"] or ctx["dead"] or ctx["busy"]:
+            return
+        ctx["busy"] = True
+        t_start = time.monotonic()
+        c, src, app, wh = ctx["check"], ctx["src"], ctx["app"], self._screen_wh
+
+        def done(snap):
+            ctx["busy"] = False
+            self._check_done(ctx, snap, why, t_start, rc)
+
+        def failed(_e):
+            ctx["busy"] = False
+
+        self._bg_free(lambda: keycheck.probe(c, src, app, wh), done, failed)
+
+    def _check_done(self, ctx: dict, snap, why: str, t_start: float, rc: dict | None = None):
+        """成立 = 操作成功：WAITING → 这一步完成（reason check）；用户在等 Gemini 时就做完了 → 显示着的结果过时，重问。
+        复查（rc）时成立 → 和「画面变了」一样，用最新画面重问。不成立 = 还没生效：框留着。unknown：什么都不做。"""
+        if self._check is not ctx:
+            return
+        c = ctx["check"]
+        st = keycheck.evaluate(c, ctx["base"], snap)
+        desc = keycheck.describe(c, snap)
+        if st == keycheck.UNKNOWN:
+            dbg(f"[check] unknown ({why}): {desc}")
+            return
+        prev = ctx["last"]
+        ctx.update(last=st, last_t=t_start, last_desc=desc)
+        if st == keycheck.NOT_MET:  # 操作还没生效：框留着
+            if why != "tick" or prev != keycheck.NOT_MET or ctx["acted_t"] and t_start - ctx["acted_t"] < 2 * KEYCHECK_INTERVAL_S:
+                print(f"[check] not met ({why}): {desc}", flush=True)
+            return
+        since = t_start - (ctx["acted_t"] or ctx["t_shown"])
+        if rc is not None:
+            if getattr(self, "_recheck", None) in (None, rc):
+                print(f"[check] met after {since:.1f} s ({ctx['src']}, recheck): {desc} → re-ask", flush=True)
+                rc["check"] = desc
+                self._recheck = rc
+                self._recheck_tick(rc)
+            return
+        if self.state == WAITING and not self._step_done:
+            print(f"[check] met after {since:.1f} s ({ctx['src']}, {why}): {desc}", flush=True)
+            if ctx["acted_req"] and ctx["acts"] == 0:  # 用户在等 Gemini 时就做完了：显示着的结果是按旧画面算的
+                self._check_reask(f"met while Gemini was thinking ({desc})")
+            else:
+                self._step_completed("check", f"check met: {desc}")
+
+    def _check_probe_for_request(self, ctx: dict, conf: dict):
+        """主线程，组请求时（这一步刚做完）：另起线程读一次关键指标，_add_elements 里最多等 0.2 s 拿结果，
+        写进 confirmed.detail（"check met: …" / "check not met: …"），并记下截图那一刻成立没有（ctx["at_req"]）。"""
+        ctx["at_req"] = None
+        if conf.get("detail"):  # reason = check：已经写好了
+            ctx["at_req"] = keycheck.MET
+            return None
+        if not ctx.get("ready") or ctx.get("dead"):
+            return None
+        job = {"ctx": ctx, "ev": threading.Event(), "res": None}
+        c, src, app, wh = ctx["check"], ctx["src"], ctx["app"], self._screen_wh
+
+        def work():
+            try:
+                snap = keycheck.probe(c, src, app, wh)
+                job["res"] = (keycheck.evaluate(c, ctx["base"], snap), keycheck.describe(c, snap))
+            except Exception:  # noqa: BLE001
+                pass
+            finally:
+                job["ev"].set()
+
+        threading.Thread(target=work, daemon=True).start()
+        return job
+
+    def _check_detail(self, conf: dict):
+        """后台线程（_add_elements）：把 _check_probe_for_request 的结果写进 confirmed.detail。"""
+        job, self._conf_check = getattr(self, "_conf_check", None), None
+        if not job or not job["ev"].wait(0.2) or not job["res"]:
+            return
+        st, desc = job["res"]
+        if st == keycheck.UNKNOWN:
+            return
+        job["ctx"]["at_req"] = st
+        conf["detail"] = f"check met: {desc}" if st == keycheck.MET else f"check not met: {desc}"
+
+    def _check_recheck(self, rc: dict) -> bool:
+        """复查时画面看不出变化：关键指标能判断就再读一次（结果回来成立 → 重问）。返回有没有读。
+        REQUESTING 时 check 还是刚做完那一步的：只有发请求时没成立的才读（之后成立 = 截图截早了）。"""
+        ctx = getattr(self, "_check", None)
+        if not ctx or not ctx.get("ready") or ctx.get("dead"):
+            return False
+        if self.state == REQUESTING and ctx.get("at_req") != keycheck.NOT_MET:
+            return False
+        self._check_eval(ctx, "recheck", rc)
+        return True
+
+    def _check_reask(self, why: str):
+        """关键指标说显示着的结果已经过时：撤掉它，用最新画面重新问（和复查「画面变了」一样）。"""
+        print(f"[check] {why} → 撤掉旧结果，用最新画面重新问", flush=True)
+        self._check = None
+        self._recheck = None
+        self._token += 1
+        self._provisional = None
+        if self.state == WAITING:
+            self.overlay.clear()
+            self.narrator.stop()
+        self.expect = getattr(self, "_req_expect", self.expect)
+        self._confirmed = getattr(self, "_req_confirmed", None)
+        self._request()
 
     def _fetch_guide(self):
         """后端用官方文档生成步骤大纲。没有这个接口 / 失败都没关系。"""
@@ -1205,12 +1495,14 @@ class Controller(QObject):
         with self.overlay.hidden():
             img = capture.grab()
         self._req_img = img
+        self._req_expect = self.expect  # 复查重问时用发这次请求时的 expect
         self._n_req += 1
         payload = {"app": self.task["app"], "goal": self.task["goal"], "lang": self.lang, "history": self.history[-10:],
                    "expect": self.expect, "guide": self.guide, "frontmost_app": front}
         if note:
             payload["user_note"] = note
         self._req_ax_app = self._next_fields(payload, note)
+        self._check_req_snapshot(self._req_ax_app)
         return img, payload
 
     def tool_look_at_screen(self, params: dict) -> str:
