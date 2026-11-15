@@ -526,5 +526,50 @@
       140,
       895
     ]
+  },
+  {
+    "file": "chrome_dock.jpg",
+    "group": "dock",
+    "app": "Google Chrome",
+    "goal": "use Gmail on Chrome",
+    "lang": "en",
+    "history": [],
+    "target_px": [
+      741,
+      916,
+      765,
+      941
+    ],
+    "name": "first"
+  },
+  {
+    "file": "chrome_dock.jpg",
+    "group": "dock",
+    "app": "Google Chrome",
+    "goal": "use Gmail on Chrome",
+    "lang": "en",
+    "history": [],
+    "target_px": [
+      741,
+      916,
+      765,
+      941
+    ],
+    "name": "retry",
+    "history_items": [
+      {
+        "instruction": "Click the Chrome icon in the dock at the bottom of the screen.",
+        "ok": null
+      }
+    ],
+    "user_note": "user says they clicked the wrong thing",
+    "alt_target_px": [
+      [
+        1215,
+        6,
+        1235,
+        26
+      ]
+    ]
   }
 ]

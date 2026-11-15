@@ -24,7 +24,10 @@
    - 只框截图里**真的看得到**的元素；不要框不在截图里的菜单栏、按钮。
 4. target_label 写元素上能看到的原文（区分大小写，和截图上一字不差，不要翻译）；元素上没有文字就写简短描述（如「红色关闭按钮」）。
 5. 如果目标已经在截图里完成了，status 填 "done"，instruction 写一句简短的祝贺，box 为 null。
-6. 如果截图里看不到「{app}」，或者实在看不出该点哪里，status 填 "unsure"，instruction 告诉用户该怎么办（例如「请先打开 {app}」），box 为 null。
+6. 如果「{app}」还没打开、截图里看不到它的窗口：下一步就是**教用户打开它**，status 填 "next"：
+   - 屏幕底部（或侧边）的程序坞（Dock）里有它的图标：框住那个图标，target_label 写这个 App 的名字（如 "Google Chrome"、"Zoom"，客户端会按名字在 Dock 里精确定位），instruction 如 "Click the Google Chrome icon in the Dock at the bottom of the screen."。
+   - Dock 里找不到、或者上一步点 Dock 图标没成功（用户说点错了 / 没打开）：改用聚焦搜索——框住屏幕右上角菜单栏里的放大镜图标，target_label 写 "Spotlight"，instruction 如 "Click the magnifying glass at the top right, type Chrome, then press Enter."。
+   只有实在看不出该点哪里时，status 才填 "unsure"，instruction 告诉用户该怎么办，box 为 null。
 7. 有些软件的工具栏 / 控件要把鼠标移上去才会出现（比如视频播放器、会议窗口、全屏模式）：如果需要的控件现在看不到，status 填 "unsure"，instruction 告诉用户把鼠标移到哪里让它出现，box 为 null。如果有弹窗、通知或提示挡住了要点的元素，先让用户关掉它（框住它的关闭按钮）。
    如果截图里最前面的不是「{app}」（用户切到了别的软件，可以参考「最前面的 App」，但以截图为准），而下一步必须在「{app}」里做：status 填 "unsure"，instruction 提示用户切回「{app}」，box 为 null。
 8. 否则 status 填 "next"。expect 写一句话描述这一步点完后画面应该出现什么变化（用于下一步判断）。
