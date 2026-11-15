@@ -11,7 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from app import docs_guide, gemini, steps, voice
+from app import chat, docs_guide, gemini, steps, voice
 
 app = FastAPI(title="Hack The Nest 2026 API")
 
@@ -94,6 +94,21 @@ def next_step(body: steps.NextStepIn):
     body.history = body.history[-10:]
     out = steps.mock_next_step(body) if gemini.MOCK else steps.next_step(body)
     return steps.finalize(out, body.lang)
+
+
+@app.post("/api/chat", response_model=chat.ChatOut)
+def chat_endpoint(body: chat.ChatIn):
+    if not body.message.strip():
+        return bad_request("message 不能为空")
+    try:
+        steps.decode_screenshot(body.screenshot)
+    except ValueError as e:
+        return bad_request(str(e))
+    body.messages = body.messages[-10:]
+    if body.task:
+        body.task.history = body.task.history[-10:]
+    out = chat.mock_chat(body) if gemini.MOCK else chat.chat(body)
+    return chat.finalize_chat(out, has_task=body.task is not None, lang=body.lang)
 
 
 class SpeakIn(BaseModel):
