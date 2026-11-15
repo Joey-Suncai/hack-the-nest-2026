@@ -25,7 +25,7 @@ from pathlib import Path
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
-from showme import api, apps, capture, enroll, ocr, sync, wording
+from showme import api, apps, ax_snap, capture, enroll, ocr, sync, wording
 from showme.change import ChangeDetector, _diff, mask_rects
 from showme.config import (CHANGE_THRESHOLD, CLICK_EXTRA_PAD, DEBUG_DETECT, HIGHLIGHT_PAD, LOG, MIC_MAX_S, POLL_S,
                            NEAR_CLICK_PT, SETTLE_MAX_S, SETTLE_MIN_S, SETTLE_POLL_S, TALK_MAX_S)
@@ -444,6 +444,7 @@ class Controller(QObject):
 
         def call():
             r = api.next_step({**payload, "screenshot": capture.to_jpeg_b64(img)})
+            r = ax_snap.snap_result(r, self._screen_wh)  # Dock 图标：换成 Accessibility 的精确框
             self._log_turn("next", img, payload, r, t0)
             return r
 
@@ -464,6 +465,9 @@ class Controller(QObject):
             rec = {"kind": kind, "seconds": round(time.time() - t0, 2), "request": payload, "response": r}
             if kind == "next" and r.get("box"):
                 rec["rect_logical_xywh"] = expand(box_to_rect(r["box"], *self._screen_wh), HIGHLIGHT_PAD)
+                if r.get("snap"):
+                    rec["snap"] = r["snap"]
+                    rec["snap_rect_xywh"] = box_to_rect(r["box"], *self._screen_wh)
             (self._log_dir / f"{k}.json").write_text(json.dumps(rec, ensure_ascii=False, indent=2))
             brief = r.get("error") or (f"{r.get('action')} | {r.get('reply')}" if kind == "chat"
                                        else f"{r.get('status')} box={r.get('box')} | {r.get('instruction')}")
@@ -799,8 +803,14 @@ class Controller(QObject):
             self.panel.add_step(len(self.history) + 1, instr)
             self._update_steps()
 
-        near = self._last_box
-        self._bg_free(lambda: ocr.locate(img, label, near=near), found, lambda e: print(f"[ocr] {_msg(e)}", flush=True))
+        near, wh = self._last_box, self._screen_wh
+
+        def locate():  # 顺序：AX Dock 匹配 → OCR
+            t = time.perf_counter()
+            box = ax_snap.dock_box(label, guess.get("instruction"), guess.get("box"), wh)
+            return (box, (time.perf_counter() - t) * 1000) if box else ocr.locate(img, label, near=near)
+
+        self._bg_free(locate, found, lambda e: print(f"[ocr] {_msg(e)}", flush=True))
 
     def _fetch_guide(self):
         """后端用官方文档生成步骤大纲。没有这个接口 / 失败都没关系。"""
@@ -952,6 +962,7 @@ class Controller(QObject):
             return f"ERROR: {_english(e)}"
         except Exception as e:  # noqa: BLE001
             return f"ERROR: {e}"
+        r = ax_snap.snap_result(r, self._screen_wh)  # Dock 图标：换成 Accessibility 的精确框
         self._log_turn("next", img, payload, r, t0)
         self._tool_time("show_next_step", t0p)
         if epoch != self._stop_epoch:  # 等 Gemini 时用户按了 Stop：不画框、不念
