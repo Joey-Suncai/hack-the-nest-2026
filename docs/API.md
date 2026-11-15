@@ -163,7 +163,13 @@
 
 ### 背景消息 `[step]`
 - 客户端用 ElevenLabs 的 **contextual update**（WebSocket 消息 `{"type": "contextual_update", "text": "..."}`）告诉 Agent 用户进行到哪一步，文字以 `[step]` 开头，比如 `"[step] Step 3 shown: Click Clone from URL in the dropdown."`
+- 三种格式（前缀一字不差）：
+  - `"[step] Step N shown: <instruction>"`：出了新框（客户端同时念这一步）
+  - `"[step] Task done: <instruction>"`：画面变化后 `/api/next-step` 返回 `done`
+  - `"[step] Unsure: <instruction>"`：画面变化后 `/api/next-step` 返回 `unsure`
 - Agent 不会回复、不会念出来，只用来理解上下文（用户接着问「这一步什么意思」时它知道是哪一步）
+- 框还在、用户也没开口时，Agent 调 `show_next_step` 且**没有 note**：客户端直接返回 `"SHOWN: <当前这一步>"`，不截图、不出新框。用户说了 done / wrong button 等，Agent 一定带 note 调用，客户端才重新截图
+- 后端：上一步 `ok = false`（用户没点中 / 说点错了）时，`/api/next-step` 会自动做一次「裁剪放大再定位」（多约 2–3 秒），日历、图标栏这类差一格的情况重试时更准
 
 ### 客户端流程（参考）
 1. 用户开口说任务 → Agent 说一句短确认并调 `show_next_step` → 客户端画框、**自己念**这一步 → 返回 `SHOWN: ...` → Agent 不再重复
