@@ -15,13 +15,23 @@ def test_exact_match_case_insensitive():
     assert best_match(ITEMS, "chart") == [100, 100, 140, 200]
 
 
-def test_contains_prefers_shortest_line():
-    assert best_match([("Chart Style", [1, 1, 2, 2]), ("Insert Chart", [3, 3, 4, 4]), ("A long line about the Chart menu", [5, 5, 6, 6])], "chart") == [1, 1, 2, 2]
+def test_contains_prefers_shortest_line_when_not_strict():
+    items = [("Chart Style", [1, 1, 2, 2]), ("Insert Chart", [3, 3, 4, 4]), ("A long line about the Chart menu", [5, 5, 6, 6])]
+    assert best_match(items, "chart", strict=False) == [1, 1, 2, 2]
+    assert best_match(items, "chart") is None  # 秒出框只认完全一样的
 
 
 def test_ellipsis_and_fuzzy():
-    assert best_match(ITEMS, "Clone Git Repository…") == [300, 200, 330, 400]
-    assert best_match(ITEMS, "Clone Git Repo") == [300, 200, 330, 400]
+    assert best_match(ITEMS, "Clone Git Repository…") == [300, 200, 330, 400]  # 省略号不算差别
+    assert best_match(ITEMS, "Clone Git Repo") is None
+    assert best_match(ITEMS, "Clone Git Repo", strict=False) == [300, 200, 330, 400]
+
+
+def test_strict_rejects_ambiguous_duplicates():
+    """联调实例：屏幕上有两处 "Extensions"（左边栏提示 + 右边标题）→ 不秒出，等 Gemini。"""
+    items = [("Extensions", [207, 894, 220, 933]), ("EXTENSIONS", [100, 60, 112, 120]), ("Install", [201, 110, 213, 134])]
+    assert best_match(items, "Extensions") is None
+    assert best_match(items, "install") == [201, 110, 213, 134]
 
 
 def test_no_match_returns_none():

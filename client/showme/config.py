@@ -13,6 +13,7 @@ VOICE_CONFIRM_S = 0.5  # 累计多少秒人声后做一次声纹判断（这段�
 VOICE_END_S = 0.6  # 连续多少秒没人声算这段话结束
 DUCK_VOLUME = 0.3  # 检测到人声时 ShowMe 播放音量压到多少
 PTT_KEY = "space"  # 「按住说话」用的键
+TAP_TO_TALK_DEFAULT = True  # 默认「点按收音」：现场太吵，免提时 VAD / 声纹连我们自己的声音都挡（联调实测）
 
 # ---- 语音输入 ----
 MIC_RATE = 16000  # /api/transcribe 要 16 kHz 单声道 WAV

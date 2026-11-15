@@ -121,6 +121,8 @@ class Panel(QWidget):
             b.setObjectName("small")
         self.live_box.setChecked(True)
         self.filter_box.setChecked(True)
+        from showme.config import TAP_TO_TALK_DEFAULT
+        self.tap_box.setChecked(TAP_TO_TALK_DEFAULT)
         self.enroll_btn = QPushButton()
         self.enroll_btn.setObjectName("small")
         live_row = QHBoxLayout()

@@ -64,15 +64,20 @@ def _norm(s: str) -> str:
     return " ".join(s.lower().replace("…", "").replace("...", "").split())
 
 
-def best_match(items: list[tuple[str, list[int]]], label: str | None) -> list[int] | None:
-    """在识别结果里找和 label 最接近的那一个（大小写不敏感）。
+def best_match(items: list[tuple[str, list[int]]], label: str | None, strict: bool = True) -> list[int] | None:
+    """在识别结果里找 label（大小写不敏感，忽略省略号）。
 
-    优先级：完全一样 > 包含 label（越短越好，避免匹配到一大段话）> 相似度 ≥ MIN_SIMILARITY 里最高的。找不到返回 None。
+    strict（默认，秒出框用）：只认「整行文字和 label 完全一样」，而且屏幕上只出现一次。
+      联调发现：包含 / 相似匹配会框到同名的别处文字（比如要点左边栏图标，却框到右边的 "Extensions" 标题），
+      5 秒后被 Gemini 更正，框跳一下、Agent 念两遍——宁可不秒出，也不能框错。
+    strict=False：完全一样 > 包含（越短越好）> 相似度最高。
     """
     if not label or not _norm(label):
         return None
     want = _norm(label)
     exact = [b for t, b in items if _norm(t) == want]
+    if strict:
+        return exact[0] if len(exact) == 1 else None
     if exact:
         return exact[0]
     contains = sorted(((len(t), b) for t, b in items if want in _norm(t)), key=lambda x: x[0])

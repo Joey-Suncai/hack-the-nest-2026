@@ -116,6 +116,9 @@ class AgentSession(QObject):
                 callback_disconnect=self._on_disconnect,
             )
             self.conv.start_session()
+            # start_session 在 SDK 自己的线程里启动录放：等它真的起来再报「已连接」
+            if not self.audio.started.wait(10):
+                raise RuntimeError("麦克风 / 扬声器 10 秒内没启动")
             self.connected.emit(self.audio.engine.name)
         except api.ApiError as e:
             print(f"[agent] 拿不到 agent-session：{e.message}（HTTP {e.status}）", flush=True)
@@ -123,7 +126,13 @@ class AgentSession(QObject):
             self.failed.emit(e.message)
         except Exception as e:  # noqa: BLE001  任何问题都退回打字模式，不能崩
             print(f"[agent] 连接失败：{e!r}", flush=True)
-            self.conv = None
+            conv, self.conv = self.conv, None
+            if conv is not None:  # 会话可能已经起来了：关掉，免得后台还有一个 Agent 在听
+                self._closing = True
+                try:
+                    conv.end_session()
+                except Exception:  # noqa: BLE001
+                    pass
             self.failed.emit(str(e))
 
     def _wrap(self, name, fn):

@@ -179,6 +179,8 @@ class FilteredAgentAudio(AudioInterface):
         self.stats = {"interrupts": 0, "rejected": 0, "accepted_while_quiet": 0}
         self._q: queue.Queue[np.ndarray] = queue.Queue()
         self._running = False
+        self.engine = None  # start() 里才建（SDK 在它自己的线程里调 start）
+        self.started = threading.Event()
 
     # ---- SDK 要求的 4 个方法 ----
     def start(self, input_callback):
@@ -195,19 +197,23 @@ class FilteredAgentAudio(AudioInterface):
             self.engine = SDEngine()
             self.engine.start(self._q.put)
         print(f"[audio] 录放：{self.engine.name}", flush=True)
+        self.started.set()
 
     def stop(self):
         self._running = False
-        self.engine.stop()
+        if self.engine:
+            self.engine.stop()
         print(f"[voice] 本次统计：打断 {self.stats['interrupts']} 次，拒绝（不是本人 / 杂音）{self.stats['rejected']} 次，"
               f"ShowMe 没说话时发出的语音 {self.stats['accepted_while_quiet']} 段", flush=True)
 
     def output(self, audio: bytes):
-        self.engine.play(audio)
+        if self.engine:
+            self.engine.play(audio)
 
     def interrupt(self):
-        self.engine.clear()
-        self.engine.set_volume(1.0)
+        if self.engine:
+            self.engine.clear()
+            self.engine.set_volume(1.0)
 
     # ---- 处理线程：凑够 512 个采样 → VAD → Gate ----
     def _loop(self):
