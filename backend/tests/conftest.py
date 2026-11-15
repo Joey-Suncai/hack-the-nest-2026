@@ -25,3 +25,9 @@ def client():
     from app.main import app
 
     return TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _no_token_by_default(monkeypatch):
+    """.env 里的 SHOWME_TOKEN 不影响测试；要测口令的用例自己 setenv。"""
+    monkeypatch.delenv("SHOWME_TOKEN", raising=False)
