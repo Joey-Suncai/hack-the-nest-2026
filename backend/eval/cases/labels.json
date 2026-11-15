@@ -449,5 +449,82 @@
     ],
     "accept_unsure": true,
     "avoid_label": "Show All Commands"
+  },
+  {
+    "file": "vscode_clone_1.jpg",
+    "name": "scm",
+    "group": "boxfix",
+    "app": "VS Code",
+    "goal": "Open the Source Control view",
+    "lang": "en",
+    "history": [],
+    "target_px": [
+      13,
+      165,
+      39,
+      191
+    ]
+  },
+  {
+    "file": "unseen_calendar.jpg",
+    "name": "nov25",
+    "group": "boxfix",
+    "app": "Calendar",
+    "goal": "Select Wednesday, November 25 in the small calendar",
+    "lang": "en",
+    "history": [],
+    "target_px": [
+      116,
+      875,
+      140,
+      895
+    ]
+  },
+  {
+    "file": "unseen_safari.jpg",
+    "name": "repeat",
+    "group": "boxfix",
+    "app": "Safari",
+    "goal": "Open a new tab",
+    "lang": "en",
+    "history": [],
+    "history_items": [
+      {
+        "instruction": "Click the plus button near the top right to open a new tab.",
+        "ok": false
+      },
+      {
+        "instruction": "Click the plus button near the top right to open a new tab.",
+        "ok": false
+      }
+    ],
+    "target_px": [
+      1390,
+      44,
+      1418,
+      72
+    ],
+    "accept_unsure": true
+  },
+  {
+    "file": "unseen_calendar.jpg",
+    "name": "nov25_retry",
+    "group": "boxfix",
+    "app": "Calendar",
+    "goal": "Select Wednesday, November 25 in the small calendar",
+    "lang": "en",
+    "history": [],
+    "history_items": [
+      {
+        "instruction": "Click 25 in the small calendar at the bottom left.",
+        "ok": false
+      }
+    ],
+    "target_px": [
+      116,
+      875,
+      140,
+      895
+    ]
   }
 ]

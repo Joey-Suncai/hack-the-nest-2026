@@ -156,6 +156,8 @@ def build_prompt(body: NextStepIn) -> str:
 
 # ---------- 两步定位：小框裁剪放大后再问一次 ----------
 REFINE = os.getenv("SHOWME_REFINE", "0").strip().lower() in ("1", "true", "yes")
+# 上一步没成功（用户点不中 / 说点错了）时自动精修：第一次保持快，重试时更准（日历 / 图标栏差一格的情况）
+REFINE_ON_RETRY = os.getenv("SHOWME_REFINE_ON_RETRY", "1").strip().lower() in ("1", "true", "yes")
 REFINE_MAX_AREA = 20000  # 框面积（0–1000²）小于这个才精修，约占屏幕 2%
 CROP_MIN_SIZE = 200  # 裁剪区域最小边长（0–1000），保证有上下文
 CROP_LONG_EDGE = 1024  # 裁剪图放大到的长边像素
@@ -211,9 +213,9 @@ def _area(box: list[int]) -> int:
     return (box[2] - box[0]) * (box[3] - box[1])
 
 
-def refine_box(img: bytes, out: NextStepOut) -> NextStepOut:
+def refine_box(img: bytes, out: NextStepOut, force: bool = False) -> NextStepOut:
     """小框裁剪放大后再定位一次；任何失败都保留原框。"""
-    if not REFINE or out.status != "next" or not out.box or _area(out.box) >= REFINE_MAX_AREA:
+    if not (REFINE or force) or out.status != "next" or not out.box or _area(out.box) >= REFINE_MAX_AREA:
         return out
     try:
         region = crop_region(out.box)
@@ -247,7 +249,8 @@ def next_step(body: NextStepIn) -> NextStepOut:
     if not body.history:
         out = out.model_copy(update={"previous_ok": None})
     out = finalize(out, body.lang)
-    out = finalize(refine_box(img, out), body.lang)
+    retry = REFINE_ON_RETRY and bool(body.history) and body.history[-1].ok is False
+    out = finalize(refine_box(img, out, force=retry), body.lang)
     t3 = time.perf_counter()
     LAST_TIMING.clear()
     LAST_TIMING.update(prep=(t1 - t0) * 1000, gemini=(t2 - t1) * 1000, post=(t3 - t2) * 1000, total=(t3 - t0) * 1000)

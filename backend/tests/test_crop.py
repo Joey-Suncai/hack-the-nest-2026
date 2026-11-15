@@ -74,3 +74,24 @@ def test_big_box_skips_refine(monkeypatch):
     monkeypatch.setattr(steps.gemini, "generate_json", fake)
     steps.next_step(NextStepIn(app="a", goal="g", screenshot=TINY_PNG_B64))
     assert len(calls) == 1
+
+
+def test_refine_runs_on_retry_even_when_disabled(monkeypatch):
+    calls = []
+
+    def fake(prompt, schema, files=None, **kw):
+        calls.append(schema)
+        if schema is NextStepOut:
+            return _small([400, 400, 500, 500])
+        return steps.RefineOut(found=True, box=[500, 500, 1000, 1000])
+
+    monkeypatch.setattr(steps, "REFINE", False)
+    monkeypatch.setattr(steps, "REFINE_ON_RETRY", True)
+    monkeypatch.setattr(steps.gemini, "generate_json", fake)
+    failed = [steps.HistoryItem(instruction="点 25", ok=False)]
+    out = steps.next_step(NextStepIn(app="a", goal="g", screenshot=TINY_PNG_B64, history=failed))
+    assert len(calls) == 2 and out.box == [450, 450, 600, 600]
+    calls.clear()
+    ok = [steps.HistoryItem(instruction="点 25", ok=True)]
+    steps.next_step(NextStepIn(app="a", goal="g", screenshot=TINY_PNG_B64, history=ok))
+    assert len(calls) == 1  # 上一步成功：不精修
