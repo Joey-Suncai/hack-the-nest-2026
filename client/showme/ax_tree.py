@@ -28,6 +28,8 @@ NAME_MAX = 60
 TIMEOUT_S = 0.3  # 每次 AX 调用最多等多久（默认 6 秒，App 卡住会拖住我们）
 SKIP_APPS = {"showme", "python", "terminal", "claude"}  # 「最前面的 App」里跳过这些
 DIALOG_SUBROLES = {"AXDialog", "AXSystemDialog", "AXFloatingWindow"}
+COLLAPSIBLE_ROLES = {"AXDisclosureTriangle", "AXOutline"}  # 折叠后子元素真的不在屏幕上的控件
+CLIP_ROLES = {"AXRow", "AXCell"}  # 只有这些会滚出窗口，要按窗口框裁
 NAME_ATTRS = ("AXTitle", "AXDescription", "AXValue", "AXHelp", "AXPlaceholderValue")
 # 每个节点一次 IPC 取完
 _ATTRS = ["AXRole", "AXSubrole", "AXPosition", "AXSize", "AXChildren", "AXHidden", "AXExpanded", "AXSelected",
@@ -237,6 +239,10 @@ class _Walker:
 
     def add(self, role: str, d: dict, clip: Rect | None):
         r = self.rect(d)
+        # 窗口框只用来去掉列表里滚出去的行 / 单元格。Chrome 报的窗口框不含标签栏（y=155 起，
+        # 「新标签页」在 y=34），对所有控件都裁掉会把整条标签栏和工具栏丢掉
+        if role not in CLIP_ROLES:
+            clip = None
         if r is not None and rect_ok(r, self.sw, self.sh, clip):
             self.out.append((role, self.name(d), to_box(r, self.sw, self.sh)))
 
@@ -250,7 +256,9 @@ class _Walker:
         role = str(d.get("AXRole") or "")
         if role in ROLES:
             self.add(role, d, clip)
-        if not children or d.get("AXExpanded") is False:
+        # Chromium / Electron（Chrome、VS Code）把普通按钮、容器也报成 AXExpanded=False，
+        # 只有真正能折叠的控件才认这个标记，否则整个窗口都读不进来（实测 VS Code 53 个只剩 0 个）
+        if not children or (d.get("AXExpanded") is False and role in COLLAPSIBLE_ROLES):
             return
         if role == "AXMenuBarItem" and d.get("AXSelected") is not True:
             return  # 没打开的菜单：里面的菜单项不在屏幕上

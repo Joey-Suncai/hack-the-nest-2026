@@ -86,3 +86,66 @@ def test_chosen_line():
     assert chosen_line({"status": "next", "element_id": None}, els) == "[ax] Gemini used its own box"
     assert chosen_line({"status": "next", "element_id": 99}, els) == "[ax] Gemini used its own box"
     assert chosen_line({"status": "next"}, []) is None
+
+
+# ---- 用假的 AX 测 _Walker（Chrome / VS Code 实测发现的两个问题）----
+class _Pt:
+    def __init__(self, x, y):
+        self.x, self.y = x, y
+
+
+class _Sz:
+    def __init__(self, w, h):
+        self.width, self.height = w, h
+
+
+class _FakeAX:
+    kAXValueAXErrorType, kAXValueCGPointType, kAXValueCGSizeType = 99, 1, 2
+
+    def AXUIElementCopyMultipleAttributeValues(self, el, names, opt, _):
+        return 0, [el.get(n) for n in names]
+
+    def AXValueGetType(self, v):
+        return 0
+
+    def AXValueGetValue(self, v, t, _):
+        return True, v
+
+    def AXUIElementCopyAttributeValue(self, el, name, _):
+        return (0, el[name]) if name in el else (-25205, None)
+
+
+def _el(role, x, y, w, h, title=None, kids=(), **extra):
+    return {"AXRole": role, "AXPosition": _Pt(x, y), "AXSize": _Sz(w, h), "AXTitle": title,
+            "AXChildren": list(kids), **extra}
+
+
+def _walk_window(win):
+    wk = ax_tree._Walker(_FakeAX(), (W, H), deadline=float("inf"))
+    wk.window(win)
+    return [(r, n) for r, n, _ in wk.out]
+
+
+def test_walker_descends_into_groups_reported_as_not_expanded():
+    # Chromium 把普通容器、按钮也报 AXExpanded=False；只有可折叠控件才停
+    btn = _el("AXButton", 10, 200, 40, 30, "Source Control", AXExpanded=False)
+    grp = _el("AXGroup", 0, 160, 300, 400, kids=[btn], AXExpanded=False)
+    hidden_row = _el("AXRow", 10, 300, 200, 20, "child row")
+    tri = _el("AXDisclosureTriangle", 10, 260, 16, 16, "folder", kids=[hidden_row], AXExpanded=False)
+    win = _el("AXWindow", 0, 155, W, 801, kids=[grp, tri])
+    got = _walk_window(win)
+    assert ("AXButton", "Source Control") in got
+    assert ("AXDisclosureTriangle", "folder") in got
+    assert ("AXRow", "child row") not in got  # 折叠起来的三角形里的东西不读
+
+
+def test_walker_keeps_controls_outside_reported_window_frame_but_clips_rows():
+    # Chrome 报的窗口框从 y=155 开始，标签栏的「新标签页」在 y=34
+    new_tab = _el("AXButton", 602, 34, 28, 41, "新标签页")
+    row_above = _el("AXRow", 10, 100, 200, 20, "scrolled-out row")
+    row_in = _el("AXRow", 10, 400, 200, 20, "visible row")
+    win = _el("AXWindow", 0, 155, W, 801, kids=[new_tab, row_above, row_in])
+    got = _walk_window(win)
+    assert ("AXButton", "新标签页") in got
+    assert ("AXRow", "visible row") in got
+    assert ("AXRow", "scrolled-out row") not in got
