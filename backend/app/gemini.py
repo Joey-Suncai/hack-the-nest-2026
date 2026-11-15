@@ -27,6 +27,7 @@ MODEL = os.getenv("GEMINI_MODEL") or DEFAULT_MODEL
 MOCK = os.getenv("GEMINI_MOCK", "0").strip().lower() in ("1", "true", "yes")
 TIMEOUT_S = float(os.getenv("GEMINI_TIMEOUT", "30"))
 RETRIES = 1
+GROUNDED_TRIES = 3  # generate_grounded 并发几次（见函数说明）
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -150,3 +151,64 @@ def _mock_instance(schema: type[T]) -> T:
         origin = getattr(ann, "__origin__", ann)
         data[name] = fake.get(origin, None)
     return schema.model_construct(**data)
+
+
+def generate_grounded(prompt: str) -> tuple[str, list[dict]]:
+    """开 Google 搜索工具生成文本。返回 (文本, [{"title", "url"}] 来源)。
+
+    搜不搜由模型自己决定，实测单次只有约一半会真的搜（有来源）。所以并发发
+    GROUNDED_TRIES 次，谁先带着来源回来就用谁；都没来源就用第一个有文本的结果。
+    thinking 调低：单次约 2–5 秒，并发所以总耗时 ≈ 单次。
+    """
+    if MOCK:
+        return f"[MOCK] 这是假回复。你的输入是：{prompt[:200]}", []
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    from google.genai import types
+
+    config = types.GenerateContentConfig(
+        tools=[types.Tool(google_search=types.GoogleSearch())],
+        thinking_config=types.ThinkingConfig(thinking_level="low"),
+    )
+    fallback, error = None, None
+    pool = ThreadPoolExecutor(GROUNDED_TRIES)
+    try:
+        futures = [pool.submit(_call, prompt, None, config) for _ in range(GROUNDED_TRIES)]
+        for fut in as_completed(futures):
+            try:
+                resp = fut.result()
+            except GeminiError as e:
+                error = error or e
+                continue
+            text = (resp.text or "").strip()
+            if not text:
+                continue
+            sources = _sources(resp)
+            if sources:
+                return text, sources
+            fallback = fallback or (text, [])
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    if fallback:
+        print("[gemini] grounded calls returned no sources")
+        return fallback
+    raise error or GeminiError("AI 没有返回内容（可能被安全过滤），换个说法试试", 502)
+
+
+def _sources(resp) -> list[dict]:
+    """从 grounding_metadata 里取网页来源，按 url 去重。任何字段都可能是 None。"""
+    try:
+        meta = resp.candidates[0].grounding_metadata
+        chunks = (meta.grounding_chunks if meta else None) or []
+    except (AttributeError, IndexError, TypeError):
+        return []
+    out, seen = [], set()
+    for chunk in chunks:
+        web = getattr(chunk, "web", None)
+        url = getattr(web, "uri", None) if web else None
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        title = getattr(web, "title", None) or getattr(web, "domain", None) or url
+        out.append({"title": title, "url": url})
+    return out
