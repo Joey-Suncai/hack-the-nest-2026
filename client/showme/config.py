@@ -33,6 +33,9 @@ API_BASE = os.getenv("SHOWME_API", "http://localhost:8000")
 # 后端口令：每个请求（/api/health 除外）带请求头 X-ShowMe-Token。口令只从环境变量读，绝不写进代码
 API_TOKEN = os.getenv("SHOWME_TOKEN") or None
 
+# ---- Accessibility 控件：每次 /api/next-step 带上目标 App 能点的控件和精确框（ax_tree.py），SHOWME_AX=0 关掉 ----
+AX_ELEMENTS = os.getenv("SHOWME_AX", "1") == "1"
+
 # ---- 截图 ----
 MAX_SIDE = 1280  # 发给后端的截图长边
 JPEG_QUALITY = 70

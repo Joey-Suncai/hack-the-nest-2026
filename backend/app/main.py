@@ -110,7 +110,7 @@ def next_step(body: steps.NextStepIn):
         return bad_request(str(e))
     body.history = body.history[-10:]
     out = steps.mock_next_step(body) if gemini.MOCK else steps.next_step(body)
-    return steps.finalize(out, body.lang)
+    return steps.finalize(out, body.lang, body.elements)
 
 
 @app.post("/api/chat", response_model=chat.ChatOut)
