@@ -24,11 +24,12 @@ from pathlib import Path
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
-from showme import api, apps, capture, ocr, wording
+from showme import api, apps, capture, enroll, ocr, wording
 from showme.change import ChangeDetector, mask_rects
 from showme.config import HIGHLIGHT_PAD, LOG, MIC_MAX_S, POLL_S
 from showme.coords import box_to_rect, expand, same_target
 from showme.i18n import t
+from showme.agent import AgentSession, MainThread
 from showme.narrator import Narrator
 from showme.recorder import Recorder
 
@@ -96,7 +97,10 @@ class Controller(QObject):
         self._guess: dict | None = None  # 上一次 next-step 返回的 next_guess（预测的下一步）
         self._provisional: dict | None = None  # OCR 秒出的框，等 Gemini 核对
         self._t_change: float | None = None  # 画面变化被检测到的时刻（算出框耗时）
-        self.step_listener = None  # 新的一步出来时回调 (instruction, kind)，kind = ocr / gemini / correction；Agent 用
+        self.step_listener = self._agent_notify  # 新的一步出来时回调 (instruction, kind)
+        self.main = MainThread()  # Agent 的 client tool 在 SDK 线程里跑，碰界面 / 截图要转到主线程
+        self.agent: AgentSession | None = None
+        self._enrolling = False
         self._log_dir = None
         self._n_req = 0
         self._n_log = 0
@@ -109,6 +113,10 @@ class Controller(QObject):
 
         panel.message_submitted.connect(self.on_user_message)
         panel.mic_toggled.connect(self.toggle_mic)
+        panel.live_toggled.connect(self.set_live)
+        panel.filter_toggled.connect(self._set_filter)
+        panel.tap_toggled.connect(self._set_tap_to_talk)
+        panel.enroll_requested.connect(self.enroll_voice)
         panel.input_focus_changed.connect(self._on_input_focus)
         panel.stop_requested.connect(self.stop)
         panel.retry_requested.connect(self.retry)
@@ -122,6 +130,11 @@ class Controller(QObject):
             return
         self.lang = self.panel.lang()
         self.panel.add_message("user", text)
+        if self.agent and self.agent.active:  # 实时语音模式：打字也交给 Agent（同一个「大脑」）
+            self._remember("user", text)
+            if not self.agent.send(text):
+                self.panel.set_error(t("live_unavailable"))
+            return
         self._interrupted_request = self.state == REQUESTING
         if self.task is not None:  # 指导中途插话：先停检测，丢掉还没回来的 next-step
             self.poll.stop()
@@ -209,6 +222,9 @@ class Controller(QObject):
 
     # ================= 语音输入 =================
     def toggle_mic(self):
+        if self.agent and self.agent.active:
+            self._toggle_talk()
+            return
         if self.recorder.recording:
             self._stop_recording()
             return
@@ -263,7 +279,7 @@ class Controller(QObject):
                 self._wait()
 
     # ================= 任务 =================
-    def _start_task(self, app: str, goal: str, outline: list[str] | None):
+    def _start_task(self, app: str, goal: str, outline: list[str] | None, request: bool = True):
         self._token += 1
         self.poll.stop()
         self.overlay.clear()
@@ -275,7 +291,8 @@ class Controller(QObject):
         self._update_steps()
         if not self.guide:
             self._fetch_guide()
-        self._request()
+        if request:
+            self._request()
 
     def _end_task(self, status: str = ""):
         self._token += 1
@@ -304,6 +321,8 @@ class Controller(QObject):
         self.narrator.stop()
         if self.recorder.recording:
             self.recorder.stop()
+        if self.agent:
+            self.agent.stop()
 
     def retry(self):
         if self.task is not None and self.state in (PAUSED, WAITING) and not self._chat_busy:
@@ -408,7 +427,8 @@ class Controller(QObject):
         if self._t_change is not None:
             print(f"[speed] 画面变化 → 出框 {(time.perf_counter() - self._t_change) * 1000:.0f} ms（{how}）", flush=True)
 
-    def _on_result(self, r: dict):
+    def _on_result(self, r: dict, source: str | None = None):
+        self._result_source = source
         if self.history and r.get("previous_ok") is False:
             self.history[-1]["ok"] = False
         status, text = r.get("status"), r.get("instruction") or ""
@@ -446,10 +466,11 @@ class Controller(QObject):
             self.panel.set_steps([h["instruction"] for h in self.history], None, [])
             self.narrator.say(outro, interrupt=not self._speak_after_reply)
             self._speak_after_reply = False
+            self._notify(text or t("done"), "done")
             self._end_task(t("done"))
         else:  # unsure：比如要点的东西被挡住了 / 窗口没打开。画面一变就自动再问，也可以按「重试」
             self.overlay.clear()
-            self._notify(text or t("unsure"), "gemini")
+            self._notify(text or t("unsure"), "unsure")
             self.current, self.last_instruction = None, None
             msg = text or t("unsure")
             self.panel.add_message("assistant", msg)
@@ -475,6 +496,8 @@ class Controller(QObject):
         self.poll.start()
 
     def _notify(self, text: str, kind: str):
+        if getattr(self, "_result_source", None) == "tool" and kind != "ocr":
+            return  # Agent 自己通过 show_next_step 要的这一步：它会念 tool 的返回值
         if self.step_listener:
             try:
                 self.step_listener(text, kind)
@@ -515,6 +538,7 @@ class Controller(QObject):
             self._on_screen_changed()
 
     def _on_screen_changed(self):
+        self._result_source = None
         self._t_change = time.perf_counter()
         if self.last_instruction:
             self.history.append({"instruction": self.last_instruction, "ok": True})
@@ -567,3 +591,206 @@ class Controller(QObject):
         n = len(done) + (1 if self.last_instruction else 0)
         upcoming = (self.guide or [])[n:]
         self.panel.set_steps(done, self.last_instruction, upcoming)
+
+    # ================= 实时语音（ElevenLabs Agent）=================
+    def set_live(self, on: bool):
+        """面板「Live voice」开关。连不上会自动退回打字模式。"""
+        if on and not (self.agent and self.agent.active):
+            self.lang = self.panel.lang()
+            self.agent = AgentSession({"show_next_step": self.tool_show_next_step,
+                                       "look_at_screen": self.tool_look_at_screen}, self.lang)
+            self.agent.connected.connect(self._on_agent_connected)
+            self.agent.failed.connect(self._on_agent_failed)
+            self.agent.user_said.connect(self._on_agent_user)
+            self.agent.agent_said.connect(self._on_agent_reply)
+            self.agent.voice_event.connect(self._on_voice_event)
+            self.panel.set_status(t("live_connecting"))
+            self.agent.start()
+        elif not on and self.agent:
+            self.agent.stop()
+            self.agent = None
+            self.narrator.muted = False
+            self.panel.set_live_state(False)
+            self.panel.set_status(t("live_off"))
+
+    def _on_agent_connected(self, engine_name: str):
+        self.narrator.stop()
+        self.narrator.muted = True
+        self.panel.set_live_state(True)
+        g = self.agent.gate
+        self.panel.set_status(t("live_on", engine=engine_name))
+        if g and not g.voiceprints:
+            self.panel.add_message("assistant", t("no_voiceprint"))
+        if g:
+            g.filter_enabled = self.panel.filter_box.isChecked()
+            g.push_to_talk = self.panel.tap_box.isChecked()
+
+    def _on_agent_failed(self, why: str):
+        self.agent = None
+        self.narrator.muted = False
+        self.panel.set_live_state(False)
+        self.panel.set_error(t("live_unavailable"))
+        print(f"[agent] 退回打字模式：{why}", flush=True)
+
+    def _on_agent_user(self, text: str):
+        self.panel.add_message("user", text)
+        self._remember("user", text)
+
+    def _on_agent_reply(self, text: str):
+        if text.strip():
+            self.panel.add_message("assistant", text)
+            self._remember("assistant", text)
+
+    def _on_voice_event(self, kind: str, score):
+        if kind == "duck":
+            self.panel.set_status(t("hearing"))
+        elif kind == "reject":
+            self.panel.set_status(t("ignored_voice"))
+        elif kind == "accept":
+            self.panel.set_status(t("listening_agent"))
+
+    def _agent_notify(self, text: str, kind: str):
+        """画面变化后的新一步 → 让 Agent 念出来。"""
+        if not (self.agent and self.agent.active):
+            return
+        prefix = {"ocr": "Next", "gemini": "Next", "correction": "Correction", "done": "DONE", "unsure": "UNSURE"}.get(kind)
+        if prefix:
+            self.agent.send(f"[screen changed] {prefix}: {text}")
+
+    # ---- client tools（在 SDK 线程里调用）----
+    def tool_show_next_step(self, params: dict) -> str:
+        goal = (params.get("goal") or "").strip()
+        note = (params.get("note") or "").strip() or None
+        t0 = time.time()
+        try:
+            img, payload = self.main.call(lambda: self._tool_prepare(goal, note))
+        except Exception as e:  # noqa: BLE001
+            return f"ERROR: {e}"
+        try:
+            r = api.next_step({**payload, "screenshot": capture.to_jpeg_b64(img)})
+        except api.ApiError as e:
+            self._log_turn("next", img, payload, {"error": e.message}, t0)
+            self.main.call(lambda: self._on_error(e))
+            return f"ERROR: {e.message}"
+        self._log_turn("next", img, payload, r, t0)
+        self.main.call(lambda: self._on_result(r, source="tool"))
+        status, text = r.get("status"), r.get("instruction") or ""
+        return text if status == "next" else f"{'DONE' if status == 'done' else 'UNSURE'}: {text}"
+
+    def _tool_prepare(self, goal: str, note: str | None):
+        """主线程：决定是不是新任务，截图，组 next-step 请求。"""
+        self._token += 1  # 丢掉还没回来的 next-step / OCR
+        self.poll.stop()
+        self._provisional = None
+        if self.task is None or (not note and goal and _different_goal(goal, self.task["goal"])):
+            self._start_task(apps.frontmost_app() or t("current_app"), goal or t("current_app"), None, request=False)
+        elif goal:
+            self.task["goal"] = goal
+        if note and self.last_instruction:  # 「做完了 / 点错了」：当前这步记进 history，带上 note 重新看
+            self.history.append({"instruction": self.last_instruction, "ok": None})
+        self.state = REQUESTING
+        self.panel.set_status(t("looking"))
+        front = apps.frontmost_app()
+        with self.overlay.hidden():
+            img = capture.grab()
+        self._req_img = img
+        self._n_req += 1
+        payload = {"app": self.task["app"], "goal": self.task["goal"], "lang": self.lang, "history": self.history[-10:],
+                   "expect": self.expect, "guide": self.guide, "frontmost_app": front}
+        if note:
+            payload["user_note"] = note
+        return img, payload
+
+    def tool_look_at_screen(self, params: dict) -> str:
+        q = (params.get("question") or "").strip() or "What is on the screen?"
+        t0 = time.time()
+        try:
+            img, payload = self.main.call(lambda: self._tool_chat_prepare(q))
+            r = api.chat({**payload, "screenshot": capture.to_jpeg_b64(img)})
+        except api.ApiError as e:
+            return f"ERROR: {e.message}"
+        except Exception as e:  # noqa: BLE001
+            return f"ERROR: {e}"
+        self._log_turn("chat", img, payload, r, t0)
+        return r.get("reply") or "I'm not sure."
+
+    def _tool_chat_prepare(self, q: str):
+        front = apps.frontmost_app()
+        with self.overlay.hidden():
+            img = capture.grab()
+        return img, {"lang": self.lang, "message": q, "messages": self.messages[-MAX_MESSAGES:],
+                     "task": self._task_state(), "frontmost_app": front}
+
+    # ---- 面板开关 ----
+    def _set_filter(self, on: bool):
+        if self.agent and self.agent.gate:
+            self.agent.gate.filter_enabled = on
+        print(f"[voice] 声纹过滤 {'开' if on else '关'}", flush=True)
+
+    def _set_tap_to_talk(self, on: bool):
+        """「点一下开始收音、再点一下结束」模式（现场太吵时用）。"""
+        if self.agent and self.agent.gate:
+            self.agent.gate.push_to_talk = on
+            self.agent.gate.key_down = False
+        self.panel.set_talking(False)
+        print(f"[voice] 点按收音 {'开' if on else '关'}", flush=True)
+
+    def _toggle_talk(self):
+        g = self.agent.gate if self.agent else None
+        if not g:
+            return
+        if not g.push_to_talk:  # 没开点按模式时，麦克风按钮直接切到点按模式并开始收音
+            g.push_to_talk = True
+            self.panel.tap_box.setChecked(True)
+        g.key_down = not g.key_down
+        self.panel.set_talking(g.key_down)
+        print(f"[voice] 收音 {'开始' if g.key_down else '结束'}", flush=True)
+
+    # ---- 录入声纹（面板按钮）----
+    def enroll_voice(self, name: str):
+        if self._enrolling or not name:
+            return
+        self._enrolling = True
+        was_live = bool(self.agent and self.agent.active)
+        if was_live:  # 录音和实时对话不能同时占用麦克风
+            self.set_live(False)
+        self.panel.set_enrolling(True)
+
+        def prompt(i, n, s):
+            self.main.call(lambda: self.panel.add_message("step", t("enroll_prompt", i=i, n=n, s=s)))
+            import subprocess
+            subprocess.run(["afplay", "/System/Library/Sounds/Tink.aiff"])
+
+        def retry(i, lvl):
+            self.main.call(lambda: self.panel.add_message("error", t("enroll_retry", i=i)))
+
+        def work():
+            from showme.audio_engine import record_clip
+            from showme.voice_filter import SpeakerModel
+
+            vp, levels = enroll.enroll(record_clip, SpeakerModel().embed, prompt, on_retry=retry)
+            return enroll.save_named(name, vp), levels
+
+        def ok(res):
+            path, levels = res
+            self.panel.add_message("assistant", t("enroll_done", name=name))
+            print(f"[voice] 已保存 {name} 的声纹 {path}，音量 {levels}", flush=True)
+            finish()
+
+        def fail(e):
+            self.panel.set_error(t("enroll_failed", e=_msg(e)))
+            finish()
+
+        def finish():
+            self._enrolling = False
+            self.panel.set_enrolling(False)
+            if was_live:
+                self.panel.live_box.setChecked(True)  # 重新连接，会加载新声纹
+
+        self._bg_free(work, ok, fail)
+
+
+def _different_goal(a: str, b: str) -> bool:
+    """两个目标是不是明显不同（词重合很少）。Agent 每次调用时措辞会变，不能一变就当成新任务。"""
+    wa, wb = set(a.lower().split()), set(b.lower().split())
+    return len(wa & wb) / max(1, len(wa | wb)) < 0.3

@@ -33,6 +33,7 @@ class Narrator(QObject):
         super().__init__()
         self.overlay, self.run_bg, self.voice_enabled, self.lang = overlay, run_bg, voice_enabled, lang
         self.queue: list[_Item] = []
+        self.muted = False  # 实时语音（Agent）开着时静音：声音都由 Agent 负责，不能两个声音同时说
         self.current: _Item | None = None
         self._gen = 0
         self.timer = QTimer(self)  # 没有语音时，字幕到点消失
@@ -43,7 +44,7 @@ class Narrator(QObject):
         self.watch.timeout.connect(self._check_audio)
 
     def say(self, text: str, interrupt: bool = False) -> None:
-        if not text:
+        if not text or self.muted:
             return
         if interrupt:
             self.stop()
