@@ -26,9 +26,9 @@ from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
 from showme import api, apps, capture, enroll, ocr, sync, wording
-from showme.change import ChangeDetector, mask_rects
-from showme.config import (CLICK_EXTRA_PAD, CLICK_SETTLE_S, DEBUG_DETECT, HIGHLIGHT_PAD, LOG, MIC_MAX_S, POLL_S,
-                           TALK_MAX_S, TYPE_IDLE_S)
+from showme.change import ChangeDetector, _diff, mask_rects
+from showme.config import (CHANGE_THRESHOLD, CLICK_EXTRA_PAD, DEBUG_DETECT, HIGHLIGHT_PAD, LOG, MIC_MAX_S, POLL_S,
+                           SETTLE_MAX_S, SETTLE_MIN_CLICK_S, SETTLE_POLL_S, TALK_MAX_S, TYPE_IDLE_S)
 from showme.coords import box_to_rect, expand, same_target
 from showme.i18n import t
 from showme.agent import AgentSession, MainThread
@@ -121,7 +121,10 @@ class Controller(QObject):
         # 「这一步做完了」：点击 / 打字 / 画面变化，都走 _step_completed，一步只算一次
         self._step_done = True  # 还没有框时也算「做完了」，任何触发都忽略
         self._step_reason = None
-        self._click_due = None  # 点了框里：这个时刻之后再截图（让软件反应）
+        self._settle: dict | None = None  # 这一步做完了，正在等画面稳定再截图（_settle_tick）
+        self._last_raw = None  # 轮询最近一帧（遮罩后）：画面变化触发时当「稳定」比较的起点
+        self._n_filler = 0
+        self._last_box: list[int] | None = None  # 上一个框：OCR 有多个候选时选离它近的
         self._typing_step = False
         self.typing = TypingTracker(TYPE_IDLE_S)
         self.inputs = InputWatcher(self._on_click, self._on_key)
@@ -496,6 +499,7 @@ class Controller(QObject):
 
     def _show_step(self, box: list[int], text: str, kind: str = "gemini"):
         rect = expand(box_to_rect(box, *self._screen_wh), HIGHLIGHT_PAD)
+        self._last_box = list(box)
         self.overlay.show_target(rect, text)
         self.last_instruction = text
         self._sync_step = len(self.history) + 1
@@ -537,7 +541,14 @@ class Controller(QObject):
                 self._speed_log("等 Gemini")
                 self.panel.add_step(len(self.history) + 1, text)
                 self._wait()
-        elif status == "done":
+            return
+        if prov:  # OCR 秒出的框已经念了，Gemini 却说 done / unsure：马上停掉那句、清掉框
+            print(f"[speed] OCR 框作废：Gemini 说 {status}（OCR 框 {prov['box']}「{prov['instruction']}」）", flush=True)
+            self.narrator.stop()
+            self.overlay.clear()
+            self.last_instruction = None
+            self._speak_after_reply = False
+        if status == "done":
             # tool 要的（Agent 会祝贺）：客户端不念；画面变化路径里 Agent 不知道，客户端自己念
             self.overlay.clear()
             outro = wording.outro(self.task["app"], self.task["goal"], len(self.history), self.lang, text)
@@ -582,7 +593,9 @@ class Controller(QObject):
         self._t_change = None
         self._step_done = False
         self._step_reason = None
-        self._click_due = None
+        self._settle = None
+        self._last_raw = None
+        self.poll.setInterval(int(POLL_S * 1000))
         self.typing.reset()
         cur = self.current or {}
         self._typing_step = bool(self.last_instruction) and is_typing_step(
@@ -611,10 +624,8 @@ class Controller(QObject):
         if self.state != WAITING:
             dbg(f"_on_poll：state={self.state}，不检测")
             return
-        if self._click_due is not None:  # 点了框里，等软件反应完再截图
-            if time.monotonic() >= self._click_due:
-                self._click_due = None
-                self._on_screen_changed()
+        if self._settle is not None:  # 这一步做完了：等画面稳定再截正式的图
+            self._settle_tick()
             return
         if self._step_done:
             return
@@ -635,7 +646,8 @@ class Controller(QObject):
             return
         if grew:  # 遮罩变大了：基准帧用同样的遮罩重算
             self.detector.reset(self._masked(self._base_raw))
-        fired = self.detector.feed(self._masked(raw))
+        self._last_raw = self._masked(raw)
+        fired = self.detector.feed(self._last_raw)
         if DEBUG_DETECT:
             area = self._screen_wh[0] * self._screen_wh[1]
             masked = min(1.0, sum(w * h for _, _, w, h in self._masks) / area)
@@ -653,10 +665,37 @@ class Controller(QObject):
         self._step_reason = reason
         self._t_change = time.perf_counter()
         print(f"[step] 完成（{reason}{'/' + detail if detail else ''}）：{self.last_instruction!r}", flush=True)
-        if reason == "click":
-            self._click_due = time.monotonic() + CLICK_SETTLE_S  # 轮询里到点再截图
+        # 不马上截图：菜单还在弹、窗口还在加载时截到旧画面，Gemini 会以为用户没点，又让点同一个（日志里 22 处）
+        self._settle = {"t0": time.monotonic(), "reason": reason, "n": 0,
+                        "min": SETTLE_MIN_CLICK_S if reason == "click" else 0.0,
+                        "prev": self._last_raw if reason == "screen_change" else None}
+        self.poll.setInterval(int(SETTLE_POLL_S * 1000))
+        if not self.poll.isActive():
+            self.poll.start()
+
+    def _settle_tick(self):
+        """每 SETTLE_POLL_S 秒截一张缩略图：连续 2 张基本不变（diff ≤ CHANGE_THRESHOLD）就截正式的图；
+        点击至少等 SETTLE_MIN_CLICK_S；最多等 SETTLE_MAX_S（视频 / 动画一直在动也不能卡住）。"""
+        st = self._settle
+        el = time.monotonic() - st["t0"]
+        try:
+            self._grow_masks()
+            raw = self._masked(capture.to_small_gray(capture.grab()))
+        except Exception:  # noqa: BLE001  截不了缩略图：直接截正式的（出错在那边处理）
+            raw = None
+        st["n"] += 1
+        d = _diff(raw, st["prev"]) if raw is not None and st["prev"] is not None else None
+        st["prev"] = raw
+        if el >= SETTLE_MAX_S or raw is None:
+            how = "到时间了" if raw is not None else "截图失败"
+        elif d is not None and d <= CHANGE_THRESHOLD and el >= st["min"]:
+            how = "稳定了"
         else:
-            self._on_screen_changed()
+            return
+        print(f"[settle] {st['reason']}：等了 {el * 1000:.0f} ms，{how}（{st['n']} 帧，最后 diff={d if d is None else round(d, 4)}）", flush=True)
+        self._settle = None
+        self.poll.setInterval(int(POLL_S * 1000))
+        self._on_screen_changed()
 
     def _on_click(self, x: float, y: float):
         """全局左键按下（用户点的是别的 App）。点在当前框里 = 这一步完成。"""
@@ -709,7 +748,8 @@ class Controller(QObject):
             self.panel.add_step(len(self.history) + 1, instr)
             self._update_steps()
 
-        self._bg_free(lambda: ocr.locate(img, label), found, lambda e: print(f"[ocr] {_msg(e)}", flush=True))
+        near = self._last_box
+        self._bg_free(lambda: ocr.locate(img, label, near=near), found, lambda e: print(f"[ocr] {_msg(e)}", flush=True))
 
     def _fetch_guide(self):
         """后端用官方文档生成步骤大纲。没有这个接口 / 失败都没关系。"""
@@ -752,6 +792,7 @@ class Controller(QObject):
             self.panel.set_status(t("live_off"))
 
     def _on_agent_connected(self, engine_name: str):
+        self.narrator.prefetch(list(FILLERS))  # 调 tool 时马上念的那两句：先生成好
         self.narrator.stop()  # 步骤由客户端念（不静音），对话由 Agent 说；两边不重叠见 _speak_step / _on_agent_voice_start
         self.panel.set_live_state(True)
         g = self.agent.gate
@@ -825,8 +866,19 @@ class Controller(QObject):
             self.panel.set_status(t("listening_agent"))
 
     # ---- client tools（在 SDK 线程里调用）----
+    def _filler(self):
+        """主线程：Agent 一调用 tool 就念一句 "Let me look." / "One sec."（轮流），免得用户干等 4–6 秒。
+        不丢 Agent 的声音（它的回答还在后面）；Agent 回答开始播放时，这句没念完就被 _on_agent_voice_start 停掉。"""
+        if self._talking or not self.panel.voice_enabled():
+            return
+        text = FILLERS[self._n_filler % len(FILLERS)]
+        self._n_filler += 1
+        sync.log(f"filler {text!r} ({'cached' if self.narrator.cached(text) else 'not cached, fetching'})")
+        self.narrator.say(text, interrupt=True)
+
     def tool_show_next_step(self, params: dict) -> str:
         epoch, t0p = self._stop_epoch, time.perf_counter()
+        self.main.call(self._filler)
         goal = (params.get("goal") or "").strip()
         note = (params.get("note") or "").strip() or None
         if self._sync_step is not None and self.overlay._rect is not None and not self._user_turn_since_step:
@@ -889,6 +941,7 @@ class Controller(QObject):
 
     def tool_look_at_screen(self, params: dict) -> str:
         epoch, t0p = self._stop_epoch, time.perf_counter()
+        self.main.call(self._filler)
         q = (params.get("question") or "").strip() or "What is on the screen?"
         t0 = time.time()
         try:
@@ -1065,6 +1118,9 @@ def with_offer(reply: str, question: str) -> str:
         return reply
     return (f"{reply}\n\n[ShowMe note for the assistant] After you answer, ask the user in one short sentence: "
             f"\"Want me to show you step by step?\" If they say yes, call show_next_step with this as the goal: {question}")
+
+
+FILLERS = ("Let me look.", "One sec.")
 
 
 def tool_reply(r: dict) -> str:

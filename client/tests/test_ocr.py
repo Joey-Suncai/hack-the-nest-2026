@@ -56,3 +56,34 @@ def test_real_vision_finds_rendered_text():
     assert box is not None
     ymin, xmin, ymax, xmax = box
     assert 650 < (ymin + ymax) / 2 < 790 and 550 < (xmin + xmax) / 2 < 950, box  # 图上 (700..1100, 500..540)
+
+
+def test_normalized_exact_ignores_case_and_edge_symbols():
+    items = [("R Markdown...", [10, 10, 20, 60]), ("Next Section →", [500, 300, 520, 400]), ('"Save"', [1, 1, 2, 2])]
+    assert best_match(items, "R Markdown") == [10, 10, 20, 60]
+    assert best_match(items, "r markdown…") == [10, 10, 20, 60]
+    assert best_match(items, "Next Section") == [500, 300, 520, 400]
+    assert best_match(items, "NEXT SECTION →") == [500, 300, 520, 400]
+    assert best_match(items, "save:") == [1, 1, 2, 2]
+
+
+def test_contains_either_way_whole_words_only():
+    assert best_match([("R Markdown Document", [1, 1, 2, 2])], "R Markdown...") == [1, 1, 2, 2]  # 屏幕上的更长
+    assert best_match([("Clone", [1, 1, 2, 2])], "Clone Repository") == [1, 1, 2, 2]  # label 更长
+    assert best_match([("Encode", [1, 1, 2, 2])], "code") is None  # 不是整词
+    assert best_match([("Clone Git Repository", [1, 1, 2, 2])], "Clone Git Repo") is None
+
+
+def test_too_short_does_not_contain_match():
+    assert best_match([("OK Cancel", [1, 1, 2, 2])], "OK") is None  # 只有 2 个字符：不做包含匹配
+    assert best_match([("OK", [1, 1, 2, 2])], "ok") == [1, 1, 2, 2]  # 完全相同可以
+
+
+def test_exact_beats_contains_and_nearest_breaks_ties():
+    items = [("Save", [100, 100, 110, 140]), ("Save As", [100, 200, 110, 260])]
+    assert best_match(items, "Save") == [100, 100, 110, 140]  # 完全相同优先
+    two = [("Extensions", [207, 894, 220, 933]), ("EXTENSIONS", [100, 60, 112, 120])]
+    assert best_match(two, "Extensions") is None  # 分不出来 → 等 Gemini
+    assert best_match(two, "Extensions", near=[90, 20, 110, 40]) == [100, 60, 112, 120]  # 离上一个框近
+    mid = [("Open", [500, 100, 510, 140]), ("Open", [500, 860, 510, 900])]
+    assert best_match(mid, "Open", near=[490, 480, 510, 520]) is None  # 一样远：还是放弃

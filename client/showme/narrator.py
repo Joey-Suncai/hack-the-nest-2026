@@ -45,6 +45,7 @@ class Narrator(QObject):
         self._player = player
         self.stream = stream or api.speak_stream
         self.queue: list[_Item] = []
+        self._cache: dict[tuple[str, str], list] = {}  # (文字, 语言) → 解好的 PCM：常用短句启动时先生成（prefetch）
         self.muted = False  # 旧开关：True 时什么都不念（现在实时语音模式下也由客户端念步骤，默认不用）
         self.current: _Item | None = None
         self._lock = threading.Lock()
@@ -65,6 +66,26 @@ class Narrator(QObject):
     def speaking(self) -> bool:
         return self.current is not None or bool(self.queue)
 
+    def prefetch(self, texts: list[str]) -> None:
+        """后台把几句常用短句（"Let me look."）先用 /api/speak 生成、解码好，之后 say() 直接播，不等网络。"""
+        lang = self.lang()
+
+        def run():
+            for text in texts:
+                try:
+                    data = b"".join(self.stream(speakable(text), lang))
+                    pcm = speech.decode_mp3(data) if data else None
+                    if pcm is not None and len(pcm[0]):
+                        self._cache[(text, lang)] = [pcm]
+                        print(f"[audio] 缓存好了：{text!r}（{len(pcm[0]) / pcm[1]:.1f} s）", flush=True)
+                except Exception as e:  # noqa: BLE001  缓存不了就照常现取
+                    print(f"[audio] 缓存 {text!r} 失败：{getattr(e, 'message', e)}", flush=True)
+
+        threading.Thread(target=run, name="speak-cache", daemon=True).start()
+
+    def cached(self, text: str) -> bool:
+        return (text, self.lang()) in self._cache
+
     def say(self, text: str, interrupt: bool = False, tag: int | None = None) -> None:
         if not text or self.muted:
             return
@@ -72,7 +93,15 @@ class Narrator(QObject):
             self.stop()
         item = _Item(text, tag)
         self.queue.append(item)
-        if self.voice_enabled():
+        pcm = self._cache.get((text, self.lang())) if self.voice_enabled() else None
+        if pcm is not None:  # 缓存好的：不用网络，马上能播
+            try:
+                self.player.warmup()
+            except Exception:  # noqa: BLE001
+                pass
+            self._deliver(item, pcm)
+            item.done = True
+        elif self.voice_enabled():
             lang, spoken = self.lang(), speakable(text)
             threading.Thread(target=self._fetch, args=(item, spoken, lang), name="speak", daemon=True).start()
         else:

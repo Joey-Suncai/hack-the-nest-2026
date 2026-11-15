@@ -5,6 +5,7 @@ Vision 的框是 0–1 归一化、原点在左下角；我们统一用 [ymin, x
 
 import difflib
 import io
+import re
 import time
 
 from PIL import Image
@@ -38,7 +39,7 @@ def find_text_boxes(img: Image.Image, label: str | None = None, fast: bool = Tru
     if not ok:
         raise RuntimeError(f"Vision 识别失败：{err}")
     out = []
-    low_label = (label or "").strip().lower()
+    low_label = _norm(label or "")
     for obs in req.results() or []:
         cands = obs.topCandidates_(1)
         if not cands:
@@ -60,24 +61,57 @@ def find_text_boxes(img: Image.Image, label: str | None = None, fast: bool = Tru
     return out
 
 
+_EDGE = re.compile(r"^[\W_]+|[\W_]+$")  # 首尾的标点 / 符号：… ... → : 引号 括号
+MIN_CONTAINS = 3  # 「包含」匹配时，较短的一方至少几个字符
+NEAR_RATIO = 0.7  # 多个候选时：最近的要比第二近的近这么多（距离 ≤ 0.7 倍）才算分得出来
+
+
 def _norm(s: str) -> str:
-    return " ".join(s.lower().replace("…", "").replace("...", "").split())
+    """转小写、去掉首尾标点和符号、合并空格。"R Markdown..." → "r markdown"，"Next Section →" → "next section"。"""
+    s = " ".join((s or "").lower().replace("…", " ").split())
+    return " ".join(_EDGE.sub("", s).split())
 
 
-def best_match(items: list[tuple[str, list[int]]], label: str | None, strict: bool = True) -> list[int] | None:
-    """在识别结果里找 label（大小写不敏感，忽略省略号）。
+def _contains(a: str, b: str) -> bool:
+    """较短的一方（至少 MIN_CONTAINS 个字符）作为完整的词出现在较长的一方里（"code" 不算在 "encode" 里）。"""
+    short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+    if len(short) < MIN_CONTAINS:
+        return False
+    return re.search(rf"(?<!\w){re.escape(short)}(?!\w)", long_) is not None
 
-    strict（默认，秒出框用）：只认「整行文字和 label 完全一样」，而且屏幕上只出现一次。
-      联调发现：包含 / 相似匹配会框到同名的别处文字（比如要点左边栏图标，却框到右边的 "Extensions" 标题），
-      5 秒后被 Gemini 更正，框跳一下、Agent 念两遍——宁可不秒出，也不能框错。
+
+def _center(b: list[int]) -> tuple[float, float]:
+    return (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
+
+
+def _pick(boxes: list[list[int]], near: list[int] | None) -> list[int] | None:
+    """一个候选就用它；多个时选离上一个框最近的，而且要明显更近，否则分不出来 → None（等 Gemini）。"""
+    if len(boxes) == 1:
+        return boxes[0]
+    if not boxes or not near:
+        return None
+    cy, cx = _center(near)
+    ds = sorted(((((y - cy) ** 2 + (x - cx) ** 2) ** 0.5, b) for b in boxes for y, x in [_center(b)]), key=lambda d: d[0])
+    return ds[0][1] if ds[0][0] <= NEAR_RATIO * ds[1][0] else None
+
+
+def best_match(items: list[tuple[str, list[int]]], label: str | None, strict: bool = True,
+               near: list[int] | None = None) -> list[int] | None:
+    """在识别结果里找 label。两边先规范化（_norm）。
+
+    strict（默认，秒出框用）：规范化后完全相同 > 一方包含另一方（较短的至少 3 个字符、整词）。
+      同一档里有多个候选：优先离上一个框（near）近的；还分不出来就放弃（宁可等 Gemini，也不能框错——
+      联调时包含匹配曾框到同名的别处文字，比如左边栏图标 vs 右边的 "Extensions" 标题）。
     strict=False：完全一样 > 包含（越短越好）> 相似度最高。
     """
-    if not label or not _norm(label):
+    want = _norm(label or "")
+    if not want:
         return None
-    want = _norm(label)
     exact = [b for t, b in items if _norm(t) == want]
     if strict:
-        return exact[0] if len(exact) == 1 else None
+        if exact:
+            return _pick(exact, near)
+        return _pick([b for t, b in items if _norm(t) and _contains(_norm(t), want)], near)
     if exact:
         return exact[0]
     contains = sorted(((len(t), b) for t, b in items if want in _norm(t)), key=lambda x: x[0])
@@ -90,14 +124,14 @@ def best_match(items: list[tuple[str, list[int]]], label: str | None, strict: bo
     return None
 
 
-def locate(img: Image.Image, label: str | None) -> tuple[list[int] | None, float]:
-    """一步到位：识别 + 找 label。返回 (框或 None, 用了多少毫秒)。出错返回 (None, ms)。"""
+def locate(img: Image.Image, label: str | None, near: list[int] | None = None) -> tuple[list[int] | None, float]:
+    """一步到位：识别 + 找 label。near：上一个框（多个候选时选离它近的）。返回 (框或 None, 用了多少毫秒)。"""
     t0 = time.perf_counter()
     box = None
     try:
-        box = best_match(find_text_boxes(img, label, fast=True), label)  # 约 50 ms
+        box = best_match(find_text_boxes(img, label, fast=True), label, near=near)  # 约 50 ms
         if box is None:  # 小字 fast 模式可能认不出，再用 accurate 试一次（约 230 ms）
-            box = best_match(find_text_boxes(img, label, fast=False), label)
+            box = best_match(find_text_boxes(img, label, fast=False), label, near=near)
     except Exception as e:  # noqa: BLE001  OCR 出问题就等 Gemini
         print(f"[ocr] 识别出错：{e}", flush=True)
     return box, (time.perf_counter() - t0) * 1000

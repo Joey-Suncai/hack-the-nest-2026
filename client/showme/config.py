@@ -46,7 +46,11 @@ STABLE_FRAMES = 1  # 变化后连续几帧不动，才算用户这一步做完�
 # ---- 高亮样式（光圈）----
 HIGHLIGHT_PAD = 12  # 框比目标元素四周大多少（逻辑像素）
 CLICK_EXTRA_PAD = 8  # 判断「点在框里」时，画出来的框四周再放宽多少
-CLICK_SETTLE_S = 0.4  # 点了框里的东西后等多久再截图（让软件反应）
+# 这一步做完了（点击 / 画面变化 / 打字）→ 先等画面稳定再截图发给后端：每 SETTLE_POLL_S 截一张缩略图，
+# 连续 2 张 diff ≤ CHANGE_THRESHOLD 才截；点击至少等 SETTLE_MIN_CLICK_S，最多等 SETTLE_MAX_S（视频 / 动画一直动也照截）
+SETTLE_POLL_S = 0.1
+SETTLE_MIN_CLICK_S = 0.3
+SETTLE_MAX_S = 1.5
 TYPE_IDLE_S = 1.2  # 打字步骤：最后一次按键后多久没再按，算打完了
 HIGHLIGHT_COLOR = "#FF2D78"  # 框和光晕的颜色
 BORDER_WIDTH = 4  # 实线边框粗细
