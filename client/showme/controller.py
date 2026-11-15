@@ -28,7 +28,7 @@ from PyQt6.QtWidgets import QApplication
 from showme import api, apps, capture, enroll, ocr, sync, wording
 from showme.change import ChangeDetector, _diff, mask_rects
 from showme.config import (CHANGE_THRESHOLD, CLICK_EXTRA_PAD, DEBUG_DETECT, HIGHLIGHT_PAD, LOG, MIC_MAX_S, POLL_S,
-                           NEAR_CLICK_PT, NEAR_CLICK_WINDOW_S, SETTLE_MAX_S, SETTLE_MIN_S, SETTLE_POLL_S, TALK_MAX_S)
+                           NEAR_CLICK_PT, SETTLE_MAX_S, SETTLE_MIN_S, SETTLE_POLL_S, TALK_MAX_S)
 from showme.coords import box_to_rect, expand, same_target
 from showme.i18n import t
 from showme.agent import AgentSession, MainThread
@@ -127,9 +127,8 @@ class Controller(QObject):
         self._last_box: list[int] | None = None  # 上一个框：OCR 有多个候选时选离它近的
         # 每一步只认一个主信号（step_kind）：click = 点在框里；type = 回车；key = 有按键。用户说 done → Agent 带 note 调 tool。
         # 画面变化只在两种情况下算：没有辅助功能权限（监听不到点击 / 按键）、或者没有框（unsure 之后等用户自己弄好）；
-        # 以及点击步骤的后备：点在框外附近、点完 NEAR_CLICK_WINDOW_S 秒内画面明显变了。
+        # 点在框外 NEAR_CLICK_PT 以内也算（框画偏了）。
         self._kind = "click"
-        self._near_click_at: float | None = None
         self._rebase = False  # 下一帧重取基准帧
         self.inputs = InputWatcher(self._on_click, self._on_key)
         self._inputs_ok = self.inputs.start()
@@ -600,7 +599,6 @@ class Controller(QObject):
         self._settle = None
         self._last_raw = None
         self.poll.setInterval(int(POLL_S * 1000))
-        self._near_click_at = None
         self._rebase = False
         cur = self.current or {}
         self._kind = step_kind(self.last_instruction, cur.get("expect")) if self.last_instruction else "none"
@@ -633,8 +631,6 @@ class Controller(QObject):
             return
         if self._step_done:
             return
-        if self._kind == "type" and self._inputs_ok:  # 打字步骤：只认回车（_on_key）或用户说 done，不看画面
-            return
         try:
             raw = capture.to_small_gray(capture.grab())
         except Exception as e:  # noqa: BLE001
@@ -648,7 +644,9 @@ class Controller(QObject):
             return
         if grew:  # 遮罩变大了：基准帧用同样的遮罩重算
             self.detector.reset(self._masked(self._base_raw))
-        self._last_raw = self._masked(raw)
+        self._last_raw = self._masked(raw)  # 做之前的画面：等稳定时用来判断「画面变了没有」
+        if self._kind in ("type", "key") and self._inputs_ok:  # 只认回车 / 按键（_on_key）或用户说 done，不看画面变化
+            return
         fired = self.detector.feed(self._last_raw)
         if DEBUG_DETECT:
             area = self._screen_wh[0] * self._screen_wh[1]
@@ -659,8 +657,6 @@ class Controller(QObject):
             return
         if not self._screen_only_backup():
             self._step_completed("screen_change")
-        elif self._near_click_at is not None and time.monotonic() - self._near_click_at <= NEAR_CLICK_WINDOW_S:
-            self._step_completed("click_near")
         else:  # 加载、悬停、动画、下拉框……不是用户做完了这一步
             dbg("画面变了，但用户没点框 → 不算完成（重取基准帧）")
             self._rebase = True
@@ -680,7 +676,9 @@ class Controller(QObject):
         print(f"[step] 完成（{reason}{'/' + detail if detail else ''}）：{self.last_instruction!r}", flush=True)
         # 不马上截图：菜单还在弹、窗口还在加载时截到旧画面，Gemini 会以为用户没点，又让点同一个（日志里 22 处）
         # 不管哪种信号，都从新的一帧开始比、至少等 SETTLE_MIN_S（画面变化触发那一帧不能当「稳定」的起点）
-        self._settle = {"t0": time.monotonic(), "reason": reason, "n": 0, "min": SETTLE_MIN_S, "prev": None}
+        # 先等画面「变了」（和做之前那一帧比），再等它稳定：网页点完要过一会儿才开始变，太早截到的还是旧画面
+        self._settle = {"t0": time.monotonic(), "reason": reason, "n": 0, "min": SETTLE_MIN_S, "prev": None,
+                        "base": self._last_raw, "changed": self._last_raw is None or reason == "screen_change"}  # 画面变化触发：已经变了
         self.poll.setInterval(int(SETTLE_POLL_S * 1000))
         if not self.poll.isActive():
             self.poll.start()
@@ -698,10 +696,13 @@ class Controller(QObject):
         st["n"] += 1
         d = _diff(raw, st["prev"]) if raw is not None and st["prev"] is not None else None
         st["prev"] = raw
+        if raw is not None and not st["changed"] and _diff(raw, st["base"]) > CHANGE_THRESHOLD:
+            st["changed"] = True
+            st["t_changed"] = el
         if el >= SETTLE_MAX_S or raw is None:
-            how = "到时间了" if raw is not None else "截图失败"
-        elif d is not None and d <= CHANGE_THRESHOLD and el >= st["min"]:
-            how = "稳定了"
+            how = ("截图失败" if raw is None else "画面一直没变，到时间了" if not st["changed"] else "一直在动，到时间了")
+        elif st["changed"] and d is not None and d <= CHANGE_THRESHOLD and el >= st["min"]:
+            how = "稳定了" if st["base"] is None else f"{st.get('t_changed', 0) * 1000:.0f} ms 时开始变，之后稳定了"
         else:
             return
         print(f"[settle] {st['reason']}：等了 {el * 1000:.0f} ms，{how}（{st['n']} 帧，最后 diff={d if d is None else round(d, 4)}）", flush=True)
@@ -710,30 +711,57 @@ class Controller(QObject):
         self._on_screen_changed()
 
     def _on_click(self, x: float, y: float):
-        """全局左键按下（用户点的是别的 App）。点在当前框里 = 这一步完成。"""
-        if self.state != WAITING or self._step_done or self.overlay._rect is None:
+        """全局左键按下（用户点的是别的 App）。点在当前框里（或框外 NEAR_CLICK_PT 以内：框画偏了）= 这一步完成。
+        OCR 秒出的框在 Gemini 核对回来之前也能点（_adopt_provisional）。"""
+        prov = self.state == REQUESTING and self._provisional is not None
+        if (self.state != WAITING and not prov) or self._step_done or self.overlay._rect is None:
             return
         r = self.overlay._rect
         rect = (r.x(), r.y(), r.width(), r.height())
-        if self._kind == "type":  # 打字步骤：点输入框是打字的一部分，不算完成
+        kind = step_kind(self._provisional["instruction"]) if prov else self._kind
+        if kind == "type":  # 打字步骤：点输入框是打字的一部分，不算完成
             return
         if click_in_rect((x, y), rect, CLICK_EXTRA_PAD):
-            self._step_completed("click")
+            reason = "click"
         elif near_rect((x, y), rect, CLICK_EXTRA_PAD, NEAR_CLICK_PT):
-            dbg(f"点在框外附近 ({x:.0f}, {y:.0f})：{NEAR_CLICK_WINDOW_S}s 内画面明显变了就算完成")
-            self._near_click_at = time.monotonic()
-            self._rebase = True
+            reason = "click_near"
+            dbg(f"点在框外附近 ({x:.0f}, {y:.0f})：算完成（框可能画偏了）")
         else:
             dbg(f"点在框外 ({x:.0f}, {y:.0f})，不算完成")
+            return
+        if prov:
+            self._adopt_provisional()
+        self._step_completed(reason)
+
+    def _adopt_provisional(self):
+        """用户在 Gemini 核对回来之前就照着 OCR 框做了：这一步就按 OCR 框算，丢掉还在路上的核对
+        （它是按点之前的截图答的，回来也是旧的），直接走正常流程：等画面稳定 → 截图 → 下一步。"""
+        prov, self._provisional = self._provisional, None
+        print(f"[speed] 用户在 Gemini 核对前就点了 OCR 框「{prov['instruction']}」：不等核对，直接下一步", flush=True)
+        self._token += 1  # 丢掉核对结果
+        self.current = {"instruction": prov["instruction"], "box": prov["box"]}
+        self.expect = None
+        t_change = self._t_change
+        self._wait()
+        self._t_change = t_change
+        try:  # 点之前的画面当基准（等稳定时要先看到画面变了）
+            self._grow_masks()
+            self._last_raw = self._masked(capture.to_small_gray(self._req_img))
+        except Exception:  # noqa: BLE001
+            self._last_raw = None
 
     def _on_key(self, is_return: bool):
         """全局按键：只看是不是回车，不记内容。打字步骤只认回车；快捷键步骤有按键就算。"""
-        if self.state != WAITING or self._step_done:
+        prov = self.state == REQUESTING and self._provisional is not None and self.overlay._rect is not None
+        if (self.state != WAITING and not prov) or self._step_done:
             return
-        if self._kind == "type" and is_return:
-            self._step_completed("enter")
-        elif self._kind == "key":
-            self._step_completed("key")
+        kind = step_kind(self._provisional["instruction"]) if prov else self._kind
+        reason = "enter" if kind == "type" and is_return else ("key" if kind == "key" else None)
+        if reason is None:
+            return
+        if prov:
+            self._adopt_provisional()
+        self._step_completed(reason)
 
     def _on_screen_changed(self):
         dbg(f"_on_screen_changed ✅ 触发：state={self.state} last_instruction={self.last_instruction!r} next_guess={self._guess!r}")

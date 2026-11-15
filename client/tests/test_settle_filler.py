@@ -166,7 +166,7 @@ def _signals(monkeypatch, kind, inputs_ok=True, fired=True):
     monkeypatch.setattr(capture, "to_small_gray", lambda img: np.zeros((64, 64), np.float32))
     done = []
     c = types.SimpleNamespace(state=ctl.WAITING, _step_done=False, _settle=None, _kind=kind, _inputs_ok=inputs_ok,
-                              _near_click_at=None, _rebase=False, _base_raw=np.zeros((64, 64), np.float32),
+                              _rebase=False, _provisional=None, _base_raw=np.zeros((64, 64), np.float32),
                               overlay=types.SimpleNamespace(_rect=_Rect()), _grow_masks=lambda: False,
                               _masked=lambda raw: raw, _last_raw=None,
                               detector=types.SimpleNamespace(feed=lambda f: fired, reset=lambda f: None))
@@ -192,18 +192,13 @@ def test_key_step_any_key(monkeypatch):
     assert done == ["key"]
 
 
-def test_click_step_ignores_screen_change_unless_near_click(monkeypatch):
+def test_click_step_ignores_screen_change_and_near_click_counts(monkeypatch):
     c, done = _signals(monkeypatch, "click")
     c._on_poll()  # 加载 / 悬停：画面变了但没点
     assert done == [] and c._rebase
     c._on_click(400, 600)  # 点得很远
-    c._on_poll()
     assert done == []
-    c._on_click(75, 205)  # 框外 25 点（放宽 8 点之外）：附近
-    assert c._near_click_at is not None
-    c._on_poll()  # 点之后先重取基准帧
-    assert done == []
-    c._on_poll()  # 之后画面明显变了
+    c._on_click(75, 205)  # 框外 25 点（放宽 8 点之外）：框画偏了，直接算
     assert done == ["click_near"]
 
 
@@ -230,3 +225,44 @@ def test_agent_cannot_replace_shown_step_by_itself():
     c._tool_prepare = lambda goal, note: calls.append("screenshot")
     out = Controller.tool_show_next_step(c, {"goal": "clone"})
     assert out == "SHOWN: Click Clone" and calls == []  # 不念 filler、不截图
+
+
+def test_settle_waits_for_change_before_stable(monkeypatch, capsys):
+    c = _settler(monkeypatch, [0.0] * 4 + [0.5] * 60)  # 点完先没反应（网页还在请求），之后才变
+    c._last_raw = np.zeros((64, 64), np.float32)  # 点之前的画面
+    c._step_completed("click")
+    _run(c, max_ticks=80)
+    out = capsys.readouterr().out
+    assert c.fired and "开始变，之后稳定了" in out
+
+
+def test_settle_no_change_gives_up_at_max(monkeypatch, capsys):
+    c = _settler(monkeypatch, [0.0] * 400)
+    c._last_raw = np.zeros((64, 64), np.float32)
+    c._step_completed("click")
+    c._settle_tick()
+    assert c.fired == []  # 一直没变：不会 0.3 s 就截
+    c._settle["t0"] -= ctl.SETTLE_MAX_S
+    c._settle_tick()
+    assert c.fired and "画面一直没变，到时间了" in capsys.readouterr().out
+
+
+def test_click_on_ocr_box_before_gemini_confirms(monkeypatch):
+    c, done = _signals(monkeypatch, "click", fired=False)
+    c.state = ctl.REQUESTING
+    c._provisional = {"box": [1, 2, 3, 4], "instruction": "Click Subject"}
+    c._token, c._t_change, c._req_img = 5, 1.0, None
+    c._wait = lambda: setattr(c, "state", ctl.WAITING)
+    c._adopt_provisional = types.MethodType(Controller._adopt_provisional, c)
+    c._on_click(120, 210)
+    assert done == ["click"] and c._token == 6 and c._provisional is None  # Gemini 核对作废
+    assert c.current["instruction"] == "Click Subject" and c._t_change == 1.0
+
+
+def test_click_elsewhere_during_ocr_box_keeps_waiting_for_gemini(monkeypatch):
+    c, done = _signals(monkeypatch, "click", fired=False)
+    c.state = ctl.REQUESTING
+    c._provisional = {"box": [1, 2, 3, 4], "instruction": "Click Subject"}
+    c._token = 5
+    c._on_click(600, 900)
+    assert done == [] and c._token == 5 and c._provisional is not None
