@@ -21,11 +21,11 @@ LINES = [
     "Help me clone https://github.com/octocat/Hello-World in VS Code",
     "What is that button at the top of my screen?",
     "Okay, done.",
-    "[screen changed] Next: Click Clone from URL in the dropdown.",
+    "What does clone mean?",
     "Thanks!",
 ]
 TOOL_RESULTS = {
-    "show_next_step": "Click the input box at the top of the window.",
+    "show_next_step": "SHOWN: Click the input box at the top of the window.",
     "look_at_screen": "That is the search box. You can type a command or file name there.",
 }
 QUIET_S = 2.0  # 最后一段语音之后安静这么久，算这一轮说完

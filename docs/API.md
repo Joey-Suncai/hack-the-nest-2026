@@ -143,18 +143,32 @@
 - 错误：`502` ElevenLabs 拒绝；`504` 超时
 - 开会话时可以覆盖 `agent.language`（`"zh"` / `"en"`，默认 `en`）和 `agent.first_message`
 
+### 分工：步骤由客户端念，Agent 只负责对话
+- **客户端**：每一步画框的同一刻，自己调 `/api/speak` 念这一步的 `instruction`（框和声音同步）
+- **Agent**：开始任务、回答问题、处理「做完了 / 跳过 / 点错了 / 卡住了」，**不念步骤、不自己猜下一步**
+- `/api/speak` 和 Agent 用同一个声音（`ELEVENLABS_VOICE_ID`，没设时两边都用预置的 Rachel）、同一档模型（英文 `eleven_flash_v2`），听起来是同一个人
+
 ### Agent 的两个 client tool（在客户端执行，结果以字符串返回给 Agent）
-- `show_next_step(goal: string, note?: string)`：客户端截图（先隐藏高亮层）→ 调 `/api/next-step`（`app` 用当前任务的软件或 `frontmost_app`，`goal` = 参数 goal，`user_note` = 参数 note，`history` / `expect` 照常带）→ 画框 → 返回给 Agent 的字符串：
-  - `next`：返回 `instruction`
-  - `done`：返回 `"DONE: " + instruction`
-  - `unsure`：返回 `"UNSURE: " + instruction`
-  - 出错：返回 `"ERROR: " + 英文错误说明`
-- `look_at_screen(question: string)`：客户端截图 → 调 `/api/chat`（`message` = question，带上当前 `task`）→ 返回 `reply`（只用回答，不按 `action` 改进度）
+- `show_next_step(goal: string, note?: string)`：客户端截图（先隐藏高亮层）→ 调 `/api/next-step`（`app` 用当前任务的软件或 `frontmost_app`，`goal` = 参数 goal，`user_note` = 参数 note，`history` / `expect` 照常带）→ 画框 + 调 `/api/speak` 念 `instruction` → 返回给 Agent 的字符串（**前缀必须一字不差**）：
+
+| 情况 | 返回给 Agent | Agent 会怎么做 |
+|---|---|---|
+| `status = next`，框已画好、客户端正在念 | `"SHOWN: " + instruction` | 不重复步骤，最多说 "Okay." 或不说话 |
+| `status = done` | `"DONE: " + instruction` | 简短祝贺（客户端不用再念 done 的那句） |
+| `status = unsure` | `"UNSURE: " + instruction` | 用一句话转告该怎么办（客户端不用念） |
+| 用户在面板上点了停止 / 任务已结束 | `"STOPPED: " + 简短说明` | 简短回应，等用户 |
+| 截图失败、后端报错、超时 | `"ERROR: " + 英文错误说明` | 说没成功，请用户再试 |
+
+- `look_at_screen(question: string)`：客户端截图 → 调 `/api/chat`（`message` = question，带上当前 `task`）→ 返回 `reply`（只用回答，不按 `action` 改进度）；回答由 Agent 念
+
+### 背景消息 `[step]`
+- 客户端用 ElevenLabs 的 **contextual update**（WebSocket 消息 `{"type": "contextual_update", "text": "..."}`）告诉 Agent 用户进行到哪一步，文字以 `[step]` 开头，比如 `"[step] Step 3 shown: Click Clone from URL in the dropdown."`
+- Agent 不会回复、不会念出来，只用来理解上下文（用户接着问「这一步什么意思」时它知道是哪一步）
 
 ### 客户端流程（参考）
-1. 用户开口说任务 → Agent 调 `show_next_step` → 客户端画框、返回指令 → Agent 念出来
-2. 用户点完、画面一变 → 客户端先用上一次的 `next_guess` 本地 OCR 秒出框 → 给 Agent 发一条用户消息 `"[screen changed] Next: <instruction>"`，Agent 原样念出来 → 后台调 `/api/next-step` 核对，不一样就更正框，并再发一条 `"[screen changed] Correction: <instruction>"`
-3. 用户问问题 → Agent 调 `look_at_screen`；用户说做完 / 跳过 / 点错 → Agent 调 `show_next_step`（带 note）
+1. 用户开口说任务 → Agent 说一句短确认并调 `show_next_step` → 客户端画框、**自己念**这一步 → 返回 `SHOWN: ...` → Agent 不再重复
+2. 用户点完、画面一变 → 客户端先用上一次的 `next_guess` 本地 OCR 秒出框并念出来 → 后台调 `/api/next-step` 核对，不一样就更正框并念更正后的指令 → 每次出新框都发一条 `[step]` contextual update 给 Agent
+3. 用户问问题 → Agent 调 `look_at_screen` 并回答；用户说做完 / 跳过 / 点错 → Agent 调 `show_next_step`（带 note）
 
 ## `POST /api/speak`
 - 用途：把一句话转成语音（ElevenLabs）

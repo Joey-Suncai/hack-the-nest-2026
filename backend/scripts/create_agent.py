@@ -13,9 +13,12 @@ from pathlib import Path
 import httpx
 from dotenv import load_dotenv
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 ROOT = Path(__file__).resolve().parents[2]
 ENV = ROOT / ".env"
 load_dotenv(ENV)
+from app import voice  # noqa: E402
 API = "https://api.elevenlabs.io/v1/convai"
 KEY = os.getenv("ELEVENLABS_API_KEY", "").strip()
 HEADERS = {"xi-api-key": KEY}
@@ -81,9 +84,8 @@ def upsert_tools(client: httpx.Client) -> list[str]:
 def agent_body(tool_ids: list[str]) -> dict:
     prompt = (ROOT / "backend" / "prompts" / "agent.txt").read_text(encoding="utf-8")
     # 英文 Agent 只能用 turbo / flash v2（v2_5 会被拒）
-    tts = {"model_id": os.getenv("AGENT_TTS_MODEL", "eleven_flash_v2")}
-    if os.getenv("ELEVENLABS_VOICE_ID", "").strip():
-        tts["voice_id"] = os.getenv("ELEVENLABS_VOICE_ID").strip()
+    # 声音和 /api/speak 一样（voice.voice_id()），用户听不出 Agent 和步骤朗读是两路
+    tts = {"model_id": os.getenv("AGENT_TTS_MODEL", "eleven_flash_v2"), "voice_id": voice.voice_id()}
     reasoning = os.getenv("AGENT_REASONING", "minimal").strip()  # flash-lite 不支持 none；空 = 模型默认
     body = {
         "name": "ShowMe",
@@ -139,7 +141,7 @@ def main():
         p = cc.get("agent", {}).get("prompt", {})
         turn = cc.get("turn", {})
         print(f"核对：llm={p.get('llm')} reasoning={p.get('reasoning_effort')} tools={len(p.get('tool_ids') or [])} "
-              f"tts={cc.get('tts', {}).get('model_id')} turn_eagerness={turn.get('turn_eagerness')} "
+              f"tts={cc.get('tts', {}).get('model_id')} voice={cc.get('tts', {}).get('voice_id')} turn_eagerness={turn.get('turn_eagerness')} "
               f"speculative_turn={turn.get('speculative_turn')}")
     if "--write-env" in sys.argv:
         write_env(agent_id)

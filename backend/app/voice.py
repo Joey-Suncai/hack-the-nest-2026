@@ -14,8 +14,13 @@ import httpx
 from app import gemini
 
 API_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream"
-DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"  # ElevenLabs 预置声音 Rachel
-DEFAULT_TTS_MODEL = "eleven_flash_v2_5"  # 延迟最低、支持中英文
+DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"  # ElevenLabs 预置声音 Rachel；Agent（create_agent.py）也用它，两边听起来是同一个人
+# 和 Agent 同一档：英文用 eleven_flash_v2（英文 Agent 只能用 v2），中文用支持多语言的 eleven_flash_v2_5
+TTS_MODEL_BY_LANG = {"en": "eleven_flash_v2", "zh": "eleven_flash_v2_5"}
+
+
+def voice_id() -> str:
+    return os.getenv("ELEVENLABS_VOICE_ID", "").strip() or DEFAULT_VOICE_ID
 TIMEOUT_S = 15
 MAX_CHARS = 300
 
@@ -41,11 +46,10 @@ def speak_stream(text: str, lang: str = "zh") -> Iterator[bytes] | None:
     key = os.getenv("ELEVENLABS_API_KEY", "").strip()
     if gemini.MOCK or not key:
         return None
-    voice_id = os.getenv("ELEVENLABS_VOICE_ID", "").strip() or DEFAULT_VOICE_ID
-    model = os.getenv("ELEVENLABS_TTS_MODEL", "").strip() or DEFAULT_TTS_MODEL
+    model = os.getenv("ELEVENLABS_TTS_MODEL", "").strip() or TTS_MODEL_BY_LANG.get(lang, "eleven_flash_v2_5")
     try:
         status, chunks, close = _post_stream(
-            API_URL.format(voice_id=voice_id),
+            API_URL.format(voice_id=voice_id()),
             params={"output_format": "mp3_44100_128"},
             headers={"xi-api-key": key, "accept": "audio/mpeg"},
             json={"text": text, "model_id": model},

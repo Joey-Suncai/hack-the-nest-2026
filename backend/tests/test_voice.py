@@ -53,7 +53,7 @@ def test_speak_streams_mp3(client, keyed, monkeypatch):
     assert r.status_code == 200 and r.headers["content-type"] == "audio/mpeg" and r.content == b"ID3mp3"
     assert seen["url"].endswith("/text-to-speech/v123/stream")
     assert seen["headers"]["xi-api-key"] == "test-key" and seen["json"]["text"] == "先点图表"
-    assert seen["json"]["model_id"] == "eleven_flash_v2_5" and fake.closed
+    assert seen["json"]["model_id"] == "eleven_flash_v2_5" and fake.closed  # zh
 
 
 def test_speak_rejected_is_502(client, keyed, monkeypatch):
@@ -66,3 +66,15 @@ def test_speak_rejected_is_502(client, keyed, monkeypatch):
 def test_speak_timeout_is_504(client, keyed, monkeypatch):
     monkeypatch.setattr(voice, "_post_stream", _fake(exc=httpx.ReadTimeout("slow")))
     assert client.post("/api/speak", json={"text": "你好", "lang": "zh"}).status_code == 504
+
+
+def test_speak_english_uses_same_model_as_agent(client, keyed, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(voice, "_post_stream", _fake(seen=seen))
+    client.post("/api/speak", json={"text": "Click Open.", "lang": "en"})
+    assert seen["json"]["model_id"] == "eleven_flash_v2" and seen["url"].endswith("/v123/stream")
+
+
+def test_default_voice_when_unset(monkeypatch):
+    monkeypatch.delenv("ELEVENLABS_VOICE_ID", raising=False)
+    assert voice.voice_id() == voice.DEFAULT_VOICE_ID
