@@ -125,6 +125,14 @@ async def transcribe(file: UploadFile = File(...), lang: str = Form("zh")):
     return {"text": text}
 
 
+@app.get("/api/agent-session")
+def agent_session():
+    try:
+        return voice.agent_session()
+    except voice.NotConfigured:
+        return JSONResponse({"error": "实时语音没有配置"}, status_code=503)
+
+
 class SpeakIn(BaseModel):
     text: str
     lang: Literal["zh", "en"] = "zh"

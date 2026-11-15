@@ -87,3 +87,29 @@ def transcribe(audio: bytes, filename: str = "audio.wav", lang: str = "zh") -> s
         return (r.json().get("text") or "").strip()
     except ValueError:
         raise gemini.GeminiError("语音识别返回的格式不对，请重试", 502)
+
+
+# ---------- 实时语音：ElevenLabs Agent 的会话签名 ----------
+SIGNED_URL = "https://api.elevenlabs.io/v1/convai/conversation/get-signed-url"
+
+
+def agent_session() -> dict:
+    """给客户端一个一次性的 signed URL（key 只留在后端）。没配好 / mock 抛 NotConfigured。"""
+    key = os.getenv("ELEVENLABS_API_KEY", "").strip()
+    agent_id = os.getenv("ELEVENLABS_AGENT_ID", "").strip()
+    if gemini.MOCK or not key or not agent_id:
+        raise NotConfigured()
+    try:
+        r = httpx.get(SIGNED_URL, params={"agent_id": agent_id}, headers={"xi-api-key": key}, timeout=10)
+    except httpx.TimeoutException:
+        raise gemini.GeminiError("实时语音服务超时了，请稍后再试", 504)
+    except httpx.HTTPError as e:
+        print(f"[voice] agent session network error: {type(e).__name__}: {e}")
+        raise gemini.GeminiError("连不上实时语音服务，请检查网络", 504)
+    if r.status_code != 200:
+        print(f"[voice] agent session {r.status_code}: {r.text[:300]}")
+        raise gemini.GeminiError(f"实时语音服务拒绝了请求（{r.status_code}）", 502)
+    url = (r.json() or {}).get("signed_url")
+    if not url:
+        raise gemini.GeminiError("实时语音服务没有返回会话地址", 502)
+    return {"signed_url": url, "agent_id": agent_id}

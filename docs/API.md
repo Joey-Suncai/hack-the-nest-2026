@@ -43,7 +43,8 @@
   "instruction": "在菜单里点击『二维』下面的第一个柱状图",
   "target_label": "柱形图",
   "box": [212, 455, 268, 512],
-  "expect": "表格旁边出现一个柱状图"
+  "expect": "表格旁边出现一个柱状图",
+  "next_guess": { "label": "二维", "instruction": "Click 2D in the chart menu.", "expect": "2D chart styles appear" }
 }
 ```
   - `status`：
@@ -53,6 +54,7 @@
   - `previous_ok`：上一步是否按预期完成；第一步为 `null`。为 `false` 时 `instruction` 先说明哪里不对
   - `box`：`[ymin, xmin, ymax, xmax]`，整数，**相对截图 0–1000 归一化**；客户端乘以主屏逻辑尺寸换算
   - `target_label`：元素上能看到的文字（没有文字就写简短描述），客户端用来做 OCR 吸附
+  - `next_guess`（可选，可能为 `null`）：预测**这一步点完之后**，下一步要点的元素。`label` 是那个元素上的原文（一定有文字），`instruction` / `expect` 同上。只在比较有把握时给。用法：画面一变，客户端先在新截图里用本地 OCR 找 `label`，找到就立刻画框、念 `instruction`；同时照常调 `/api/next-step` 核对，结果不一样再更正框和指令
 - 错误：
   - `400` `{ "error": "screenshot 不是有效的图片" }`、`{ "error": "goal 不能为空" }`
   - `422` 缺字段
@@ -129,6 +131,29 @@
 - 没配 `ELEVENLABS_API_KEY`：`503` `{ "error": "语音输入没有配置，请直接打字" }`
 - mock（`GEMINI_MOCK=1`）：返回固定的一句话（`zh`：「这个按钮是干嘛的？」；`en`：「What does this button do?」）
 - 错误：`400` 文件为空或超过 5 MB；`502` ElevenLabs 拒绝；`504` 超时
+
+## `GET /api/agent-session`（实时语音，ElevenLabs Agent）
+- 用途：客户端开始实时语音对话前调用，拿一个一次性的 signed URL 连 ElevenLabs Agent（WebSocket）。ElevenLabs key 只留在后端
+- 返回：
+```json
+{ "signed_url": "wss://api.elevenlabs.io/v1/convai/conversation?agent_id=...&conversation_signature=...", "agent_id": "agent_..." }
+```
+- 没配好（没有 `ELEVENLABS_API_KEY` / `ELEVENLABS_AGENT_ID`）或 mock：`503` `{ "error": "实时语音没有配置" }`，客户端退回打字 + `/api/chat` + `/api/speak`
+- 错误：`502` ElevenLabs 拒绝；`504` 超时
+- 开会话时可以覆盖 `agent.language`（`"zh"` / `"en"`，默认 `en`）和 `agent.first_message`
+
+### Agent 的两个 client tool（在客户端执行，结果以字符串返回给 Agent）
+- `show_next_step(goal: string, note?: string)`：客户端截图（先隐藏高亮层）→ 调 `/api/next-step`（`app` 用当前任务的软件或 `frontmost_app`，`goal` = 参数 goal，`user_note` = 参数 note，`history` / `expect` 照常带）→ 画框 → 返回给 Agent 的字符串：
+  - `next`：返回 `instruction`
+  - `done`：返回 `"DONE: " + instruction`
+  - `unsure`：返回 `"UNSURE: " + instruction`
+  - 出错：返回 `"ERROR: " + 英文错误说明`
+- `look_at_screen(question: string)`：客户端截图 → 调 `/api/chat`（`message` = question，带上当前 `task`）→ 返回 `reply`（只用回答，不按 `action` 改进度）
+
+### 客户端流程（参考）
+1. 用户开口说任务 → Agent 调 `show_next_step` → 客户端画框、返回指令 → Agent 念出来
+2. 用户点完、画面一变 → 客户端先用上一次的 `next_guess` 本地 OCR 秒出框 → 给 Agent 发一条用户消息 `"[screen changed] Next: <instruction>"`，Agent 原样念出来 → 后台调 `/api/next-step` 核对，不一样就更正框，并再发一条 `"[screen changed] Correction: <instruction>"`
+3. 用户问问题 → Agent 调 `look_at_screen`；用户说做完 / 跳过 / 点错 → Agent 调 `show_next_step`（带 note）
 
 ## `POST /api/speak`
 - 用途：把一句话转成语音（ElevenLabs）
