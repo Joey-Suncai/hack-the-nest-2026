@@ -6,6 +6,7 @@ import base64
 import binascii
 import io
 import os
+import time
 from typing import Literal
 
 from PIL import Image
@@ -31,6 +32,14 @@ class NextStepIn(BaseModel):
     frontmost_app: str | None = None
 
 
+class NextGuess(BaseModel):
+    """预测这一步点完之后，下一步要点的元素（客户端用本地 OCR 找 label 秒出框）。"""
+
+    label: str
+    instruction: str
+    expect: str | None = None
+
+
 class NextStepOut(BaseModel):
     status: Literal["next", "done", "unsure"]
     previous_ok: bool | None
@@ -38,6 +47,7 @@ class NextStepOut(BaseModel):
     target_label: str | None
     box: list[int] | None
     expect: str | None
+    next_guess: NextGuess | None = None
 
 
 def decode_screenshot(b64: str) -> bytes:
@@ -84,7 +94,12 @@ def finalize(out: NextStepOut, lang: str = "zh") -> NextStepOut:
         box = None
     unsure_msg, next_msg = _FALLBACK.get(lang, _FALLBACK["zh"])
     instruction = (out.instruction or "").strip() or (unsure_msg if status == "unsure" else next_msg)
-    return out.model_copy(update={"status": status, "box": box, "instruction": instruction})
+    guess = out.next_guess
+    if status != "next" or not guess or not (guess.label or "").strip() or not (guess.instruction or "").strip():
+        guess = None
+    else:
+        guess = guess.model_copy(update={"label": guess.label.strip(), "instruction": guess.instruction.strip()})
+    return out.model_copy(update={"status": status, "box": box, "instruction": instruction, "next_guess": guess})
 
 
 _MOCK_BOXES = [[450, 450, 550, 550], [300, 600, 380, 720], [600, 250, 680, 400]]
@@ -103,6 +118,8 @@ def mock_next_step(body: NextStepIn) -> NextStepOut:
         target_label=f"按钮{n + 1}",
         box=_MOCK_BOXES[n],
         expect=f"[MOCK] 第 {n + 1} 步完成",
+        next_guess=NextGuess(label=f"按钮{n + 2}", instruction=f"[MOCK] 第 {n + 2} 步：点这里",
+                             expect=f"[MOCK] 第 {n + 2} 步完成") if n + 1 < len(_MOCK_BOXES) else None,
     )
 
 
@@ -212,11 +229,28 @@ def refine_box(img: bytes, out: NextStepOut) -> NextStepOut:
         return out
 
 
+# next-step 的思考量："" = 模型默认；minimal / low / medium / high
+# 评测：default 93% / 4.4s，low 93% / 2.2s，minimal 85% / 1.3s → 默认 low
+THINKING = os.getenv("NEXT_STEP_THINKING", "low").strip().lower() or None
+LAST_TIMING: dict[str, float] = {}  # 最近一次 next_step 各阶段耗时（毫秒），评测脚本读
+
+
 def next_step(body: NextStepIn) -> NextStepOut:
     """真实 Gemini 版：截图 + 进度 → 下一步（小框再精修一次）。结果一定经过 finalize。"""
+    t0 = time.perf_counter()
     img = decode_screenshot(body.screenshot)
-    out = gemini.generate_json(build_prompt(body), NextStepOut, files=[(img, image_mime(img))])
+    mime = image_mime(img)
+    prompt = build_prompt(body)
+    t1 = time.perf_counter()
+    out = gemini.generate_json(prompt, NextStepOut, files=[(img, mime)], thinking=THINKING)
+    t2 = time.perf_counter()
     if not body.history:
         out = out.model_copy(update={"previous_ok": None})
     out = finalize(out, body.lang)
-    return finalize(refine_box(img, out), body.lang)
+    out = finalize(refine_box(img, out), body.lang)
+    t3 = time.perf_counter()
+    LAST_TIMING.clear()
+    LAST_TIMING.update(prep=(t1 - t0) * 1000, gemini=(t2 - t1) * 1000, post=(t3 - t2) * 1000, total=(t3 - t0) * 1000)
+    print(f"[next-step] 解码+prompt {LAST_TIMING['prep']:.0f}ms · Gemini {LAST_TIMING['gemini']:.0f}ms · "
+          f"修框 {LAST_TIMING['post']:.0f}ms · 合计 {LAST_TIMING['total']:.0f}ms（thinking={THINKING or 'default'}）")
+    return out

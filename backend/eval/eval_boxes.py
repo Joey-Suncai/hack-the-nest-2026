@@ -66,7 +66,9 @@ def main():
     if a.group:
         cases = [c for c in cases if c.get("group", "tuned") == a.group]
     hits, times, ious, cjk_bad = 0, [], [], 0
+    stage = {"prep": [], "gemini": [], "post": []}
     by_group: dict[str, list] = {}
+    guess_given, guess_ok, guess_checked = 0, 0, 0
     for c in cases:
         b64, size = to_jpeg_b64(CASES / c["file"])
         want_status = c.get("expect_status")  # "done" / "unsure" / None（要框）
@@ -87,6 +89,9 @@ def main():
             out, err = None, e.message
         dt = time.perf_counter() - t0
         times.append(dt)
+        if not err:
+            for k in stage:
+                stage[k].append(steps.LAST_TIMING.get(k, 0))
         hit, score = False, 0.0
         if want_status:
             hit = bool(out) and out.status == want_status
@@ -99,6 +104,15 @@ def main():
         if not want_status:
             ious.append(score)
         detail = err or f"{out.status} box={out.box} label={out.target_label!r}"
+        g = out.next_guess if out else None
+        if g:
+            guess_given += 1
+            detail += f" guess={g.label!r}"
+        if c.get("next_label"):
+            guess_checked += 1
+            ok = bool(g) and (c["next_label"].lower() in g.label.lower() or g.label.lower() in c["next_label"].lower())
+            guess_ok += ok
+            detail += " (guess ✅)" if ok else " (guess ❌)"
         print(f"{'✅' if hit else '❌'} {c['file']:<32} IoU={score:.2f} {dt:5.1f}s  {detail}")
         if out:
             words = len(out.instruction.split()) if lang == "en" else len(out.instruction)
@@ -112,6 +126,11 @@ def main():
         print(f"\n[lang={a.lang or '按 case'}] 模型 {gemini.MODEL}（两步定位 {'开' if steps.REFINE else '关'}）：命中率 {hits}/{n} = {hits / n:.0%}，"
               f"平均 IoU {miou:.2f}，平均耗时 {sum(times) / n:.1f}s，最慢 {max(times):.1f}s"
               + (f"，英文指令混入中文 {cjk_bad} 条" if a.lang == "en" or cjk_bad else ""))
+        print(f"  next_guess：给出 {guess_given}/{n} 次" + (f"；有标准答案的 {guess_checked} 张里猜对 {guess_ok} 张" if guess_checked else ""))
+        if stage["gemini"]:
+            avg = {k: sum(v) / len(v) for k, v in stage.items()}
+            print(f"  阶段平均：解码+prompt {avg['prep']:.0f}ms · Gemini {avg['gemini']:.0f}ms · 修框 {avg['post']:.0f}ms"
+                  f"（thinking={steps.THINKING or 'default'}）")
         if len(by_group) > 1 or a.group:
             for g, rows in sorted(by_group.items()):
                 gh = sum(h for h, _ in rows)

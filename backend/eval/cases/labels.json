@@ -207,7 +207,8 @@
       407,
       406,
       429
-    ]
+    ],
+    "next_label": "Provide repository URL"
   },
   {
     "file": "vscode_clone_2.jpg",
@@ -222,7 +223,8 @@
       46,
       1030,
       71
-    ]
+    ],
+    "next_label": "Clone from URL"
   },
   {
     "file": "vscode_clone_3.jpg",
@@ -238,7 +240,8 @@
       77,
       1030,
       99
-    ]
+    ],
+    "next_label": "Select as Repository Destination"
   },
   {
     "file": "vscode_clone_4.jpg",
@@ -255,7 +258,8 @@
       674,
       1155,
       698
-    ]
+    ],
+    "next_label": "Open"
   },
   {
     "file": "vscode_clone_5.jpg",

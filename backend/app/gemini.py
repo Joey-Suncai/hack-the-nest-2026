@@ -123,15 +123,23 @@ def generate_text(prompt: str, files: list[tuple[bytes, str]] | None = None) -> 
 
 
 def generate_json(
-    prompt: str, schema: type[T], files: list[tuple[bytes, str]] | None = None
+    prompt: str,
+    schema: type[T],
+    files: list[tuple[bytes, str]] | None = None,
+    thinking: str | None = None,
 ) -> T:
-    """结构化输出：返回 schema（pydantic 模型）的实例。"""
+    """结构化输出：返回 schema（pydantic 模型）的实例。
+
+    thinking：思考量（"minimal" / "low" / "medium" / "high"，只有 Gemini 3 系列支持）；None = 模型默认。
+    """
     if MOCK:
         return _mock_instance(schema)
     from google.genai import types
 
     config = types.GenerateContentConfig(
-        response_mime_type="application/json", response_schema=schema
+        response_mime_type="application/json",
+        response_schema=schema,
+        thinking_config=types.ThinkingConfig(thinking_level=thinking.upper()) if thinking else None,
     )
     resp = _call(prompt, files, config)
     if isinstance(resp.parsed, schema):

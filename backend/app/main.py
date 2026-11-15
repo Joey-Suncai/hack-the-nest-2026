@@ -6,7 +6,7 @@
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from typing import Literal
 
 from pydantic import BaseModel
@@ -145,10 +145,10 @@ def speak(body: SpeakIn):
         return bad_request("text 不能为空")
     if len(text) > voice.MAX_CHARS:
         return bad_request(f"text 太长了（上限 {voice.MAX_CHARS} 字）")
-    mp3 = voice.speak(text, body.lang)
-    if mp3 is None:
+    stream = voice.speak_stream(text, body.lang)
+    if stream is None:
         return Response(status_code=204)
-    return Response(content=mp3, media_type="audio/mpeg")
+    return StreamingResponse(stream, media_type="audio/mpeg")
 
 
 class GuideIn(BaseModel):
