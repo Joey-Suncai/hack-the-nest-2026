@@ -27,6 +27,7 @@ class NextStepIn(BaseModel):
     history: list[HistoryItem] = []
     expect: str | None = None
     guide: list[str] | None = None
+    user_note: str | None = None
 
 
 class NextStepOut(BaseModel):
@@ -130,6 +131,7 @@ def build_prompt(body: NextStepIn) -> str:
         history=history,
         expect=body.expect or "（无）",
         guide=guide,
+        user_note=(body.user_note or "").strip() or "（无）",
     )
 
 
