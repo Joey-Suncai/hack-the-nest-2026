@@ -171,7 +171,9 @@ def _signals(monkeypatch, kind, inputs_ok=True, fired=True):
                               _masked=lambda raw: raw, _last_raw=None,
                               detector=types.SimpleNamespace(feed=lambda f: fired, reset=lambda f: None))
     c._step_completed = lambda reason, detail=None: done.append(reason)
-    for name in ("_on_click", "_on_key", "_on_poll", "_screen_only_backup"):
+    c._down = None
+    for name in ("_on_click", "_on_mouse_down", "_on_mouse_up", "_click_completes", "_on_key", "_on_poll",
+                 "_screen_only_backup"):
         setattr(c, name, types.MethodType(getattr(Controller, name), c))
     return c, done
 
@@ -192,14 +194,74 @@ def test_key_step_any_key(monkeypatch):
     assert done == ["key"]
 
 
-def test_click_step_ignores_screen_change_and_near_click_counts(monkeypatch):
+def test_click_step_ignores_screen_change_and_clicks_outside_box(monkeypatch):
     c, done = _signals(monkeypatch, "click")
     c._on_poll()  # 加载 / 悬停：画面变了但没点
     assert done == [] and c._rebase
     c._on_click(400, 600)  # 点得很远
     assert done == []
-    c._on_click(75, 205)  # 框外 25 点（放宽 8 点之外）：框画偏了，直接算
-    assert done == ["click_near"]
+    c._on_click(75, 205)  # 框外 25 点（放宽 8 点之外）：不算（框来自真实控件，已经准了）
+    assert done == []
+
+
+class _FakeOverlay:
+    """记录 suspend / resume；suspend 后 _rect 变 None（和真的一样），resume 画回来。"""
+    def __init__(self):
+        self._rect, self.calls = _Rect(), []
+
+    def suspend(self):
+        self.calls.append("suspend")
+        self._saved, self._rect = self._rect, None
+        return True
+
+    def resume(self):
+        self.calls.append("resume")
+        self._rect = self._saved
+
+
+def _mouse(monkeypatch, kind="click"):
+    c, done = _signals(monkeypatch, kind, fired=False)
+    c.overlay = _FakeOverlay()
+    c._down = None
+    for name in ("_on_mouse_down", "_on_mouse_up", "_click_completes"):
+        setattr(c, name, types.MethodType(getattr(Controller, name), c))
+    return c, done
+
+
+def test_mouse_down_hides_box_and_up_inside_completes(monkeypatch):
+    c, done = _mouse(monkeypatch)
+    c._on_mouse_down(120, 210)
+    assert c.overlay.calls == ["suspend"] and done == []  # 按下：框马上藏起来，还不算完成
+    c._on_mouse_up(121, 211)
+    assert done == ["click"] and c.overlay.calls == ["suspend"]  # 松开在框里：完成，框不再画回来
+
+
+def test_drag_out_of_box_does_not_complete_and_box_comes_back(monkeypatch):
+    c, done = _mouse(monkeypatch)
+    c._on_mouse_down(120, 210)  # 框里按下
+    c._on_mouse_up(400, 600)  # 拖到框外松开（取消 / 拖拽）
+    assert done == [] and c.overlay.calls == ["suspend", "resume"] and c.overlay._rect is not None
+
+
+def test_press_outside_then_release_inside_does_not_complete(monkeypatch):
+    c, done = _mouse(monkeypatch)
+    c._on_mouse_down(400, 600)
+    c._on_mouse_up(120, 210)
+    assert done == [] and c.overlay.calls == ["suspend", "resume"]
+
+
+def test_mouse_up_without_down_is_ignored(monkeypatch):
+    c, done = _mouse(monkeypatch)
+    c._on_mouse_up(120, 210)  # 按下时还没有框（比如在等 Gemini）
+    assert done == [] and c.overlay.calls == []
+
+
+def test_state_change_between_down_and_up_does_not_complete(monkeypatch):
+    c, done = _mouse(monkeypatch)
+    c._on_mouse_down(120, 210)
+    c.state = ctl.PAUSED  # 按住的时候用户按了停止 / 开始说话
+    c._on_mouse_up(120, 210)
+    assert done == [] and c.overlay.calls == ["suspend", "resume"]
 
 
 def test_click_in_box_completes(monkeypatch):

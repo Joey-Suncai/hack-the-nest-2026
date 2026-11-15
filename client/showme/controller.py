@@ -28,12 +28,12 @@ from PyQt6.QtWidgets import QApplication
 from showme import api, apps, ax_snap, ax_tree, capture, enroll, ocr, reasoning, sync, wording
 from showme.change import ChangeDetector, _diff, mask_rects
 from showme.config import (AX_ELEMENTS, CHANGE_THRESHOLD, CLICK_EXTRA_PAD, CLICK_SETTLE_MAX_S, DEBUG_DETECT, HIGHLIGHT_PAD, LOG, MIC_MAX_S, POLL_S,
-                           NEAR_CLICK_PT, SETTLE_MAX_S, SETTLE_MIN_S, SETTLE_NOCHANGE_MAX_S, SETTLE_POLL_S, TALK_MAX_S)
+                           SETTLE_MAX_S, SETTLE_MIN_S, SETTLE_NOCHANGE_MAX_S, SETTLE_POLL_S, TALK_MAX_S)
 from showme.coords import box_to_rect, expand, same_target
 from showme.i18n import t
 from showme.agent import AgentSession, MainThread
 from showme.hotkey import RightOptionMonitor
-from showme.inputwatch import InputWatcher, click_in_rect, near_rect, step_kind
+from showme.inputwatch import InputWatcher, click_in_rect, step_kind
 from showme.narrator import Narrator
 from showme.recorder import Recorder
 
@@ -135,10 +135,11 @@ class Controller(QObject):
         self._req_ax_app: str | None = None
         # 每一步只认一个主信号（step_kind）：click = 点在框里；type = 回车；key = 有按键。用户说 done → Agent 带 note 调 tool。
         # 画面变化只在两种情况下算：没有辅助功能权限（监听不到点击 / 按键）、或者没有框（unsure 之后等用户自己弄好）；
-        # 点在框外 NEAR_CLICK_PT 以内也算（框画偏了）。
+        # 点击按 mouse up 算：按下时框先藏起来；按下和松开都在框里才算完成，否则松开时框画回来。
         self._kind = "click"
         self._rebase = False  # 下一帧重取基准帧
-        self.inputs = InputWatcher(self._on_click, self._on_key)
+        self._down = None  # 鼠标按下时记的 (x, y, 当时框的 rect)
+        self.inputs = InputWatcher(self._on_mouse_up, self._on_key, on_down=self._on_mouse_down)
         self._inputs_ok = self.inputs.start()
         self.hotkey = RightOptionMonitor(self.toggle_talk)
         if not self.hotkey.start():
@@ -824,31 +825,54 @@ class Controller(QObject):
         self._on_screen_changed()
 
     def _on_click(self, x: float, y: float):
-        """全局左键按下（用户点的是别的 App）。点在当前框里（或框外 NEAR_CLICK_PT 以内：框画偏了）= 这一步完成。
-        OCR 秒出的框在 Gemini 核对回来之前也能点（_adopt_provisional）。"""
+        """在同一点按下又松开（测试 / 没有 mouse up 时的后备）。"""
+        self._on_mouse_down(x, y)
+        self._on_mouse_up(x, y)
+
+    def _on_mouse_down(self, x: float, y: float):
+        """全局左键按下（用户点的是别的 App）：记下位置和当时的框，框马上藏起来。
+        OCR 秒出的框在 Gemini 核对回来之前也能点。"""
+        self._down = None
         prov = self.state == REQUESTING and self._provisional is not None
         if (self.state != WAITING and not prov) or self._step_done or self.overlay._rect is None:
             return
         r = self.overlay._rect
-        rect = (r.x(), r.y(), r.width(), r.height())
+        self._down = (x, y, (r.x(), r.y(), r.width(), r.height()))
+        suspend = getattr(self.overlay, "suspend", None)
+        if suspend is not None:
+            suspend()
+
+    def _on_mouse_up(self, x: float, y: float):
+        """全局左键松开：按下和松开都在框里 = 这一步完成（从松开时开始等画面）。
+        没点中（点在框外、拖出框外取消）→ 框画回来，这一步不算完成，之后截到的画面也不会被误当成「做完了」。"""
+        down, self._down = getattr(self, "_down", None), None
+        if down is None:
+            return
+        dx, dy, rect = down
+        if not self._click_completes((dx, dy), (x, y), rect):
+            resume = getattr(self.overlay, "resume", None)
+            if resume is not None:
+                resume()
+
+    def _click_completes(self, down_pt, up_pt, rect) -> bool:
+        prov = self.state == REQUESTING and self._provisional is not None
+        if (self.state != WAITING and not prov) or self._step_done:
+            return False  # 按下到松开之间，状态变了（新的一步、用户说话、停止）
         kind = step_kind(self._provisional["instruction"]) if prov else self._kind
-        if kind == "type":  # 打字步骤：点输入框是打字的一部分；打过字之后点任何地方 = 打完了
+        if kind == "type":  # 打字步骤：打过字之后点任何地方 = 打完了；还没打字时点输入框 → 框留着，告诉用户在哪打
             if getattr(self, "_typed_keys", 0) > 0:
                 if prov:
                     self._adopt_provisional()
                 self._step_completed("typing")
-            return
-        if click_in_rect((x, y), rect, CLICK_EXTRA_PAD):
-            reason = "click"
-        elif near_rect((x, y), rect, CLICK_EXTRA_PAD, NEAR_CLICK_PT):
-            reason = "click_near"
-            dbg(f"点在框外附近 ({x:.0f}, {y:.0f})：算完成（框可能画偏了）")
-        else:
-            dbg(f"点在框外 ({x:.0f}, {y:.0f})，不算完成")
-            return
-        if prov:
-            self._adopt_provisional()
-        self._step_completed(reason)
+                return True
+            return False
+        if click_in_rect(down_pt, rect, CLICK_EXTRA_PAD) and click_in_rect(up_pt, rect, CLICK_EXTRA_PAD):
+            if prov:
+                self._adopt_provisional()
+            self._step_completed("click")
+            return True
+        dbg(f"没点中框：按下 ({down_pt[0]:.0f}, {down_pt[1]:.0f}) 松开 ({up_pt[0]:.0f}, {up_pt[1]:.0f})，框画回来")
+        return False
 
     def _adopt_provisional(self):
         """用户在 Gemini 核对回来之前就照着 OCR 框做了：这一步就按 OCR 框算，丢掉还在路上的核对

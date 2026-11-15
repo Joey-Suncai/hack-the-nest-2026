@@ -143,6 +143,7 @@ class Overlay(QWidget):
         self.setGeometry(QApplication.primaryScreen().geometry())
 
         self._rect: QRect | None = None
+        self._suspended = None  # 鼠标按下时藏起来的 (rect, text, bubble)
         self._text = ""
         self._bubble: QRect | None = None
         self._font = QFont()
@@ -183,6 +184,7 @@ class Overlay(QWidget):
     # ---- 对外接口 ----
     def show_target(self, rect: tuple[int, int, int, int], text: str) -> None:
         """rect：(x, y, w, h) 逻辑坐标，已经加过 HIGHLIGHT_PAD。"""
+        self._suspended = None  # 新的一步：之前暂时藏起来的框作废
         self._rect = QRect(*rect)
         self._text = text
         self._bubble = self._layout_bubble()
@@ -191,8 +193,29 @@ class Overlay(QWidget):
         self.update()
 
     def clear(self) -> None:
+        self._suspended = None
         self._rect, self._text, self._bubble = None, "", None
         self._anim.stop()
+        self.update()
+
+    def suspend(self) -> bool:
+        """鼠标按下：框和气泡马上藏起来（不清掉这一步）。松开时点没中 → resume() 画回来。"""
+        if self._rect is None:
+            return False
+        self._suspended = (self._rect, self._text, self._bubble)
+        self._rect, self._text, self._bubble = None, "", None
+        self._anim.stop()
+        self.repaint()  # 立即重绘：按下的一瞬间就消失
+        return True
+
+    def resume(self) -> None:
+        """点在框外：把按下时藏起来的框画回来。中间已经画了新的一步（show_target / clear）就什么都不做。"""
+        saved, self._suspended = getattr(self, "_suspended", None), None
+        if saved is None or self._rect is not None:
+            return
+        self._rect, self._text, self._bubble = saved
+        if C.BREATHE_MS > 0:
+            self._anim.start(33)
         self.update()
 
     def show_caption(self, text: str) -> None:

@@ -2,7 +2,8 @@
 
 只靠画面变化不够：点输入框 / 勾选框 / 开关，变化只有一个光标或边框变色，而且正好在高亮框里，
 64×64 缩略图里达不到阈值。所以：
-- 点击：NSEvent 全局监听左键按下（用户点别的 App）；点在当前高亮框里（四周放宽）就算完成
+- 点击：NSEvent 全局监听左键按下 / 松开（用户点别的 App）。按下时框先藏起来；
+  按下和松开都在当前高亮框里（四周放宽）才算完成，否则松开时框画回来
 - 打字：当前这一步是「输入内容」时，用户按回车，或者最后一次按键后 TYPE_IDLE_S 秒没再按 → 算完成
   隐私：只记「有按键、什么时候、是不是回车」，不记录、不打印按了什么
 
@@ -85,10 +86,13 @@ class TypingTracker:
 
 
 class InputWatcher:
-    """装 NSEvent 监听：on_click(x, y)（左上角原点逻辑点，只有点别的 App 时）、on_key(is_return, is_tab)。都在主线程回调。"""
+    """装 NSEvent 监听（只有点 / 按在别的 App 时，都在主线程回调，坐标是左上角原点逻辑点）：
+    - on_down(x, y)：左键按下
+    - on_click(x, y)：左键松开（按钮在 Mac 上是松开时才生效，所以「点完了」按松开算）
+    - on_key(is_return, is_tab)"""
 
-    def __init__(self, on_click, on_key):
-        self.on_click, self.on_key = on_click, on_key
+    def __init__(self, on_click, on_key, on_down=None):
+        self.on_click, self.on_key, self.on_down = on_click, on_key, on_down
         self._monitors = []
 
     def start(self) -> bool:
@@ -97,7 +101,7 @@ class InputWatcher:
         if QApplication.platformName() != "cocoa":  # 离屏测试：不装
             return False
         try:
-            from AppKit import NSEvent, NSEventMaskKeyDown, NSEventMaskLeftMouseDown, NSScreen
+            from AppKit import NSEvent, NSEventMaskKeyDown, NSEventMaskLeftMouseDown, NSEventMaskLeftMouseUp, NSScreen
 
             from showme.hotkey import accessibility_ok
 
@@ -106,12 +110,18 @@ class InputWatcher:
                 return False
             screen_h = float(NSScreen.screens()[0].frame().size.height)  # 主屏（原点所在的那块）
 
-            def click(event):
-                try:
-                    p = NSEvent.mouseLocation()
-                    self.on_click(*to_top_left(float(p.x), float(p.y), screen_h))
-                except Exception as e:  # noqa: BLE001
-                    print(f"[input] 处理点击出错：{e}", flush=True)
+            def _mouse(cb, what):
+                def handler(event):
+                    if cb is None:
+                        return
+                    try:
+                        p = NSEvent.mouseLocation()
+                        cb(*to_top_left(float(p.x), float(p.y), screen_h))
+                    except Exception as e:  # noqa: BLE001
+                        print(f"[input] 处理鼠标{what}出错：{e}", flush=True)
+                return handler
+
+            down, click = _mouse(self.on_down, "按下"), _mouse(self.on_click, "松开")
 
             def key(event):
                 try:
@@ -123,7 +133,8 @@ class InputWatcher:
             def local_click(event):
                 return event  # 点 ShowMe 自己（面板）：不算完成步骤
 
-            for m in (NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(NSEventMaskLeftMouseDown, click),
+            for m in (NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(NSEventMaskLeftMouseDown, down),
+                      NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(NSEventMaskLeftMouseUp, click),
                       NSEvent.addLocalMonitorForEventsMatchingMask_handler_(NSEventMaskLeftMouseDown, local_click),
                       NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(NSEventMaskKeyDown, key)):
                 if m is not None:
