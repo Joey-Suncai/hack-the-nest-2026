@@ -177,3 +177,22 @@ def test_new_request_fields_never_crash_on_bad_response():
     Controller._apply_reasoning(c, {"status": "next", "box": [1, 2, 3, 4], "plan": [1, None], "app": 5,
                                     "situation": 3, "reasoning": None})
     assert c.guide is None
+
+
+# ---------------- 换目标 = 新任务（不沿用旧任务的历史 / 计划）----------------
+def test_goal_change_starts_new_task_even_with_correction_note():
+    from showme.controller import _starts_new_task
+    old = "add a friend in Spotify"
+    # 日志里的真实调用：Agent 纠正目标时带 note，以前带 note 一律不算新任务
+    assert _starts_new_task(old, "use the Canvas app for classes", "user is correcting the goal")
+    assert _starts_new_task(old, "use a canvas", None)
+    assert _starts_new_task(old, "log in to the Canvas website", "user wants to use Canvas")
+
+
+def test_progress_notes_keep_the_same_task():
+    from showme.controller import _starts_new_task
+    old = "schedule a meeting for tomorrow afternoon"
+    assert not _starts_new_task(old, "schedule a meeting for tomorrow afternoon", "user says done")
+    assert not _starts_new_task(old, "schedule the zoom meeting", "user clicked the wrong button")  # 措辞变了，但是进度
+    assert not _starts_new_task(old, "finish scheduling", "user says they have opened the schedule")
+    assert not _starts_new_task(old, None, "user says done")
