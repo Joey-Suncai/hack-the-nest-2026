@@ -2,6 +2,7 @@
 
 > 改接口时先改这里，提交后在群里 @ 对方，再改代码。
 > Base URL（本地）：`http://localhost:8000`（客户端用环境变量 `SHOWME_API` 覆盖）
+> **口令**：后端 `.env` 设了 `SHOWME_TOKEN` 时，除 `GET /api/health` 外的所有请求都要带请求头 `X-ShowMe-Token: <同一个值>`，否则返回 `401` `{ "error": "口令不对：请设置和后端一样的 SHOWME_TOKEN" }`。客户端从环境变量 `SHOWME_TOKEN` 读；没设就不带（后端没设口令时不检查）。
 > 所有错误统一返回：`{ "error": "给用户看的中文说明" }` + HTTP 4xx/5xx。客户端直接把 `error` 显示在面板上。
 > 客户端调用超时：`/api/next-step` 45 秒，`/api/speak` 20 秒，`/api/guide` 60 秒，`/api/chat` 30 秒，`/api/transcribe` 30 秒。
 
