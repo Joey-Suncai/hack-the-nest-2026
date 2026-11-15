@@ -28,6 +28,7 @@ class NextStepIn(BaseModel):
     expect: str | None = None
     guide: list[str] | None = None
     user_note: str | None = None
+    frontmost_app: str | None = None
 
 
 class NextStepOut(BaseModel):
@@ -132,6 +133,7 @@ def build_prompt(body: NextStepIn) -> str:
         expect=body.expect or "（无）",
         guide=guide,
         user_note=(body.user_note or "").strip() or "（无）",
+        frontmost_app=(body.frontmost_app or "").strip() or "（未知）",
     )
 
 

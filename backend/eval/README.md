@@ -50,3 +50,17 @@ uv run python eval/eval_boxes.py vscode
 ```
 
 目标：命中率 ≥ 90%，平均每步 ≤ 4s。没命中的 case 看打印出来的 instruction / label，调 `prompts/next_step.txt`。
+
+## 「没见过的软件」评测（分组 unseen）
+
+目的：证明 ShowMe 能教**任何**软件，不只是调过 prompt 的那几个。**不要针对这组调 prompt**，只看数字。
+
+```bash
+cd backend
+SET=unseen bash eval/demo_shoot.sh ~/Desktop/unseen_shots     # 10 个软件，每个 1 张
+# 标注：加 --group unseen --lang en
+uv run python eval/add_case.py ~/Desktop/unseen_shots/unseen_finder.png --name unseen_finder --group unseen \
+    --app Finder --lang en --goal "Open the Downloads folder" --pt X1 Y1 X2 Y2
+uv run python eval/eval_boxes.py --group unseen     # 只跑这一组
+uv run python eval/eval_boxes.py                    # 全部，最后按组分别给命中率
+```

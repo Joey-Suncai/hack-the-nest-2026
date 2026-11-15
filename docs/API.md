@@ -26,13 +26,15 @@
   ],
   "expect": "弹出图表类型菜单",
   "guide": ["插入 > 图表", "选择二维柱状图"],
-  "user_note": "用户说点错了，打开的是格式菜单"
+  "user_note": "用户说点错了，打开的是格式菜单",
+  "frontmost_app": "Numbers"
 }
 ```
   - `history`：已经给出过的步骤，最早的在前，最多传最近 10 条
   - `expect`：上一步返回的 `expect`；第一步传 `null`
   - `guide`：`/api/guide` 返回的 `outline`；没有就传 `null`
   - `user_note`（可选）：`/api/chat` 返回的 `note`（用户刚说的话的要点，比如「点错了」「这步做完了」），Gemini 判断下一步时会考虑；没有就不传或传 `null`
+  - `frontmost_app`（可选）：客户端用 NSWorkspace 读到的当前最前面的 App 名字（截图前读），作为「用户现在在哪个软件」的参考；和 `app` 不一样时（用户切到别的软件了），后端按截图判断，必要时返回 `unsure` 并提示用户切回 `app`。读不到就不传或传 `null`
 - 返回：
 ```json
 {
@@ -66,6 +68,7 @@
   "message": "我想在 Numbers 里把这些数据做成柱状图",
   "screenshot": "<base64 JPEG，和 next-step 一样>",
   "messages": [{ "role": "user", "text": "..." }, { "role": "assistant", "text": "..." }],
+  "frontmost_app": "Numbers",
   "task": {
     "app": "Numbers",
     "goal": "把 A1:B6 的数据做成柱状图",
@@ -81,6 +84,7 @@
 }
 ```
   - `messages`：最近 10 条对话，最早的在前，**不含**本次的 `message`；`role` 是 `"user"` 或 `"assistant"`
+  - `frontmost_app`（可选）：同 `/api/next-step`，当前最前面的 App 名字。`start` 时后端结合 `message`、截图和它判断 `app`：用户没说软件名、但能从截图和 `frontmost_app` 看出来时直接 `start`，不追问
   - `task`：没有进行中的任务时传 `null`；`outline` 可以为 `null`；`current`（当前这一步，就是上一次 `/api/next-step` 的返回）可以为 `null`
 - 返回：
 ```json

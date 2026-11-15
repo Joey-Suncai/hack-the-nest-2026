@@ -29,8 +29,10 @@ def task(step: int) -> dict:
             "current": {"instruction": ins, "target_label": label, "box": None, "expect": expect}}
 
 
-# (截图, lang, message, task, 期望 action)
+# (截图, lang, message, task, 期望 action[, frontmost_app])
 TESTS = [
+    ("vscode_clone_1.jpg", "en", f"Help me download this repo: {URL}", None, "start", "Code"),
+    ("settings_1.jpg", "en", "How do I switch to light mode?", None, "start", "System Settings"),
     ("vscode_clone_1.jpg", "en", f"I want to clone {URL} in VS Code", None, "start"),
     ("vscode_clone_1.jpg", "zh", f"帮我把这个仓库 clone 下来 {URL}", None, "start"),
     ("vscode_clone_1.jpg", "en", "help me", None, "clarify"),
@@ -52,10 +54,11 @@ def main():
         sys.exit("GEMINI_MOCK=1 时评测没有意义，用 GEMINI_MOCK=0 运行")
     imgs: dict[str, str] = {}
     hits, times = 0, []
-    for file, lang, msg, t, want in TESTS:
+    for file, lang, msg, t, want, *rest in TESTS:
+        front = rest[0] if rest else None
         if file not in imgs:
             imgs[file] = to_jpeg_b64(CASES / file)[0]
-        body = chat.ChatIn(lang=lang, message=msg, screenshot=imgs[file], task=t)
+        body = chat.ChatIn(lang=lang, message=msg, screenshot=imgs[file], task=t, frontmost_app=front)
         t0 = time.perf_counter()
         try:
             out = chat.chat(body)

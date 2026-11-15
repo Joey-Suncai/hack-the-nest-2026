@@ -98,3 +98,9 @@ def test_chat_finalizes_model_output(monkeypatch):
                         lambda *a, **k: ChatRaw(reply="ok", action="weird", app="X", goal="Y"))
     out = chat.chat(body("嗯", TASK))
     assert out.action == "resume" and out.app is None
+
+
+def test_build_prompt_includes_frontmost_app():
+    b = ChatIn(lang="en", message="make a chart", screenshot=TINY_PNG_B64, frontmost_app="Keynote")
+    assert "Keynote" in chat.build_prompt(b)
+    assert "（未知）" in chat.build_prompt(ChatIn(lang="en", message="x", screenshot=TINY_PNG_B64))

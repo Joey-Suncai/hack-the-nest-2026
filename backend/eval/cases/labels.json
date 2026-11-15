@@ -288,5 +288,135 @@
       "Click Open"
     ],
     "expect_status": "done"
+  },
+  {
+    "file": "unseen_finder.jpg",
+    "app": "Finder",
+    "goal": "Open the Downloads folder",
+    "lang": "en",
+    "history": [],
+    "group": "unseen",
+    "target_px": [
+      300,
+      391,
+      410,
+      413
+    ]
+  },
+  {
+    "file": "unseen_safari.jpg",
+    "app": "Safari",
+    "goal": "Open a new tab",
+    "lang": "en",
+    "history": [],
+    "group": "unseen",
+    "target_px": [
+      1390,
+      44,
+      1418,
+      72
+    ]
+  },
+  {
+    "file": "unseen_gmail.jpg",
+    "app": "Google Chrome",
+    "goal": "Write a new email in Gmail",
+    "lang": "en",
+    "history": [],
+    "group": "unseen",
+    "target_px": [
+      8,
+      227,
+      64,
+      283
+    ]
+  },
+  {
+    "file": "unseen_keynote.jpg",
+    "app": "Keynote",
+    "goal": "Add a new slide",
+    "lang": "en",
+    "history": [],
+    "group": "unseen",
+    "target_px": [
+      262,
+      44,
+      320,
+      86
+    ]
+  },
+  {
+    "file": "unseen_notes.jpg",
+    "app": "Notes",
+    "goal": "Create a new note",
+    "lang": "en",
+    "history": [],
+    "group": "unseen",
+    "expect_status": "done"
+  },
+  {
+    "file": "unseen_calendar.jpg",
+    "app": "Calendar",
+    "goal": "Switch to month view",
+    "lang": "en",
+    "history": [],
+    "group": "unseen",
+    "target_px": [
+      860,
+      44,
+      918,
+      74
+    ]
+  },
+  {
+    "file": "unseen_preview.jpg",
+    "app": "Preview",
+    "goal": "Rotate this document to the left",
+    "lang": "en",
+    "history": [],
+    "group": "unseen",
+    "expect_status": "unsure"
+  },
+  {
+    "file": "unseen_excel.jpg",
+    "app": "Microsoft Excel",
+    "goal": "Make the text in cell A1 bold",
+    "lang": "en",
+    "history": [],
+    "group": "unseen",
+    "target_px": [
+      117,
+      143,
+      137,
+      164
+    ]
+  },
+  {
+    "file": "unseen_spotify.jpg",
+    "app": "Spotify",
+    "goal": "Play the song Whole Night by Fadi Moubayed",
+    "lang": "en",
+    "history": [],
+    "group": "unseen",
+    "target_px": [
+      540,
+      132,
+      1000,
+      186
+    ]
+  },
+  {
+    "file": "unseen_maps.jpg",
+    "app": "Maps",
+    "goal": "Get directions to Socotra Coffee House",
+    "lang": "en",
+    "history": [],
+    "group": "unseen",
+    "target_px": [
+      250,
+      328,
+      506,
+      466
+    ]
   }
 ]
