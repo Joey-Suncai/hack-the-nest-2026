@@ -116,3 +116,87 @@ def test_endpoint_returns_next_guess_key(client, monkeypatch):
     monkeypatch.setattr(steps.gemini, "MOCK", True)
     r = client.post("/api/next-step", json={"app": "a", "goal": "g", "screenshot": TINY_PNG_B64})
     assert "next_guess" in r.json()
+
+
+# ---------- elements（macOS 辅助功能控件）----------
+ELEMENTS = [
+    {"id": 1, "role": "AXStaticText", "name": None, "box": [10, 10, 20, 20]},
+    {"id": 12, "role": "AXButton", "name": "New Tab", "box": [40, 950, 62, 966]},
+    {"id": 13, "role": "AXTextField", "name": None, "box": [120, 300, 140, 700]},
+]
+
+
+def _els():
+    return [steps.Element(**e) for e in ELEMENTS]
+
+
+def test_request_parses_with_and_without_elements():
+    assert NextStepIn(app="a", goal="g", screenshot=TINY_PNG_B64).elements is None
+    assert NextStepIn(app="a", goal="g", screenshot=TINY_PNG_B64, elements=None).elements is None
+    body = NextStepIn(app="a", goal="g", screenshot=TINY_PNG_B64, elements=ELEMENTS)
+    assert body.elements[1].name == "New Tab" and body.elements[0].name is None
+    assert body.elements[2].box == [120, 300, 140, 700]
+
+
+def test_known_element_id_overrides_box_and_label():
+    out = finalize(_out(box=[500, 500, 520, 520], target_label="new tab", element_id=12), "en", _els())
+    assert out.element_id == 12 and out.box == [40, 950, 62, 966] and out.target_label == "New Tab"
+
+
+def test_unnamed_element_keeps_model_label():
+    out = finalize(_out(target_label="title box", element_id=13), "en", _els())
+    assert out.element_id == 13 and out.box == [120, 300, 140, 700] and out.target_label == "title box"
+
+
+def test_unknown_element_id_falls_back_to_model_box():
+    out = finalize(_out(box=[10, 10, 50, 50], element_id=99), "en", _els())
+    assert out.element_id is None and out.box == [10, 10, 50, 50] and out.target_label == "图表"
+    assert finalize(_out(element_id=12)).element_id is None  # 请求没有 elements
+
+
+def test_element_id_dropped_when_not_next():
+    out = finalize(_out(status="done", box=None, element_id=12), "en", _els())
+    assert out.element_id is None and out.box is None
+
+
+def test_prompt_without_elements_unchanged():
+    kw = dict(app="Numbers", goal="做柱状图", lang="en", screenshot=TINY_PNG_B64,
+              history=[HistoryItem(instruction="点图表", ok=True)], expect="出现菜单", guide=["插入 > 图表"])
+    base = steps.gemini.load_prompt(
+        "next_step", app="Numbers", goal="做柱状图", lang_name="English", history="1. 点图表（完成）",
+        expect="出现菜单", guide="- 插入 > 图表", user_note="（无）", frontmost_app="（未知）")
+    assert steps.build_prompt(NextStepIn(**kw)) == base
+    assert steps.build_prompt(NextStepIn(**kw, elements=[])) == base
+    p = steps.build_prompt(NextStepIn(**kw, elements=ELEMENTS))
+    assert p.startswith(base) and '#12 AXButton "New Tab" [40,950,62,966]' in p
+    assert "#13 AXTextField null [120,300,140,700]" in p and "{" not in p
+
+
+def test_next_step_uses_element_and_skips_refine(monkeypatch):
+    calls = []
+
+    def fake(prompt, schema, **k):
+        calls.append(schema)
+        return NextStepOut(status="next", previous_ok=None, instruction="Click New Tab.", target_label="+",
+                           box=[45, 945, 60, 960], expect="a tab opens", element_id=12)
+
+    monkeypatch.setattr(steps.gemini, "generate_json", fake)
+    monkeypatch.setattr(steps, "REFINE", True)
+    out = steps.next_step(NextStepIn(app="Chrome", goal="g", screenshot=TINY_PNG_B64, elements=ELEMENTS))
+    assert out.element_id == 12 and out.box == [40, 950, 62, 966] and out.target_label == "New Tab"
+    assert calls == [NextStepOut]  # 没有调精修
+
+
+def test_mock_returns_first_named_element():
+    body = NextStepIn(app="a", goal="g", screenshot=TINY_PNG_B64, elements=ELEMENTS)
+    out = mock_next_step(body)
+    assert out.element_id == 12 and out.box == [40, 950, 62, 966] and out.target_label == "New Tab"
+
+
+def test_endpoint_mock_with_elements(client, monkeypatch):
+    monkeypatch.setattr(steps.gemini, "MOCK", True)
+    body = {"app": "a", "goal": "g", "screenshot": TINY_PNG_B64, "elements": ELEMENTS}
+    j = client.post("/api/next-step", json=body).json()
+    assert j["element_id"] == 12 and j["box"] == [40, 950, 62, 966] and j["target_label"] == "New Tab"
+    j = client.post("/api/next-step", json={**body, "elements": None}).json()
+    assert j["element_id"] is None and j["box"] == [450, 450, 550, 550]
