@@ -73,3 +73,9 @@ def test_build_prompt_fills_placeholders():
     assert "Numbers" in p and "做柱状图" in p and "English" in p
     assert "1. 点图表（完成）" in p and "出现菜单" in p and "- 插入 > 图表" in p
     assert "{" not in p
+
+
+def test_finalize_english_fallback():
+    out = finalize(NextStepOut(status="next", previous_ok=None, instruction="", target_label=None,
+                               box=None, expect=None), "en")
+    assert out.status == "unsure" and out.instruction.startswith("I can't tell")
