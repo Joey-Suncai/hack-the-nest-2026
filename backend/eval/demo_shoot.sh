@@ -1,10 +1,15 @@
 #!/bin/bash
 # Demo 评测截图（VS Code：从 GitHub clone 一个 repo）。每一步弹窗告诉你要摆出什么画面，点「截图」后 3 秒自动截全屏。
-# 用法：bash eval/demo_shoot.sh ~/Desktop/demo_shots
+# 用法：bash eval/demo_shoot.sh ~/Desktop/demo_shots              全部拍
+#       bash eval/demo_shoot.sh ~/Desktop/demo_shots vscode_clone_4   只重拍指定的几张
+#       DELAY=8 bash eval/demo_shoot.sh ...                          点「截图」后等几秒（默认 5）
 # 每张截图都是「点击之前」的画面。练习用的 repo：https://github.com/octocat/Hello-World
 # 截完按 eval/README.md 标注。
 set -u
-OUT="${1:?用法：bash eval/demo_shoot.sh <输出目录>}"
+OUT="${1:?用法：bash eval/demo_shoot.sh <输出目录> [文件名...]}"
+shift
+ONLY=" $* "
+DELAY="${DELAY:-5}"
 mkdir -p "$OUT"
 
 # 格式：文件名|弹窗说明
@@ -21,11 +26,12 @@ CASES=(
 for item in "${CASES[@]}"; do
   name="${item%%|*}"
   text="${item#*|}"
+  if [ "$ONLY" != "  " ] && [[ "$ONLY" != *" $name "* ]]; then continue; fi
   text="${text//\"/\\\"}"
-  choice=$(osascript -e "button returned of (display dialog \"$text\n\n摆好后点「截图」，3 秒后自动截全屏（文件：$name.png）\" with title \"Demo 截图\" buttons {\"跳过\", \"全部停止\", \"截图\"} default button \"截图\")" 2>/dev/null)
+  choice=$(osascript -e "button returned of (display dialog \"$text\n\n摆好后点「截图」，$DELAY 秒后自动截全屏（文件：$name.png）\" with title \"Demo 截图\" buttons {\"跳过\", \"全部停止\", \"截图\"} default button \"截图\")" 2>/dev/null)
   case "$choice" in
     "截图")
-      sleep 3
+      sleep "$DELAY"
       screencapture -x "$OUT/$name.png"
       afplay /System/Library/Sounds/Tink.aiff
       echo "已截图 $OUT/$name.png"

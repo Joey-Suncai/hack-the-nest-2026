@@ -195,5 +195,98 @@
       1085,
       403
     ]
+  },
+  {
+    "file": "vscode_clone_1.jpg",
+    "app": "VS Code",
+    "goal": "Clone the GitHub repo https://github.com/octocat/Hello-World",
+    "lang": "en",
+    "history": [],
+    "target_px": [
+      240,
+      407,
+      406,
+      429
+    ]
+  },
+  {
+    "file": "vscode_clone_2.jpg",
+    "app": "VS Code",
+    "goal": "Clone the GitHub repo https://github.com/octocat/Hello-World",
+    "lang": "en",
+    "history": [
+      "Click Clone Git Repository on the Welcome page"
+    ],
+    "target_px": [
+      442,
+      46,
+      1030,
+      71
+    ]
+  },
+  {
+    "file": "vscode_clone_3.jpg",
+    "app": "VS Code",
+    "goal": "Clone the GitHub repo https://github.com/octocat/Hello-World",
+    "lang": "en",
+    "history": [
+      "Click Clone Git Repository on the Welcome page",
+      "Click the repository URL box at the top"
+    ],
+    "target_px": [
+      443,
+      77,
+      1030,
+      99
+    ]
+  },
+  {
+    "file": "vscode_clone_4.jpg",
+    "app": "VS Code",
+    "goal": "Clone the GitHub repo https://github.com/octocat/Hello-World",
+    "lang": "en",
+    "history": [
+      "Click Clone Git Repository on the Welcome page",
+      "Click the repository URL box at the top",
+      "Paste the URL and choose Clone from URL"
+    ],
+    "target_px": [
+      927,
+      674,
+      1155,
+      698
+    ]
+  },
+  {
+    "file": "vscode_clone_5.jpg",
+    "app": "VS Code",
+    "goal": "Clone the GitHub repo https://github.com/octocat/Hello-World",
+    "lang": "en",
+    "history": [
+      "Click Clone Git Repository on the Welcome page",
+      "Click the repository URL box at the top",
+      "Paste the URL and choose Clone from URL",
+      "Click Select as Repository Destination"
+    ],
+    "target_px": [
+      621,
+      472,
+      849,
+      499
+    ]
+  },
+  {
+    "file": "vscode_clone_6.jpg",
+    "app": "VS Code",
+    "goal": "Clone the GitHub repo https://github.com/octocat/Hello-World",
+    "lang": "en",
+    "history": [
+      "Click Clone Git Repository on the Welcome page",
+      "Click the repository URL box at the top",
+      "Paste the URL and choose Clone from URL",
+      "Click Select as Repository Destination",
+      "Click Open"
+    ],
+    "expect_status": "done"
   }
 ]
