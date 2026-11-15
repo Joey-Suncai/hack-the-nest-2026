@@ -187,8 +187,19 @@ class Overlay(QWidget):
         """框（含光晕）、气泡和字幕占用的区域，给画面变化检测做遮罩。"""
         out = []
         if self._rect is not None:
+            # 只遮发光边框那一圈（框外扩 g、框内缩 inset），框里面照常参与比较：
+            # 点输入框后唯一的变化（光标、边框变色）就在框里面
             g = C.GLOW_SIZE + C.BORDER_WIDTH
-            out.append(self._rect.adjusted(-g, -g, g, g))
+            inset = (C.GLOW_SIZE + C.BORDER_WIDTH) // 2 + 2  # 描边有一半画在框内
+            outer = self._rect.adjusted(-g, -g, g, g)
+            inner = self._rect.adjusted(inset, inset, -inset, -inset)
+            if inner.width() <= 0 or inner.height() <= 0:
+                out.append(outer)
+            else:
+                out += [QRect(outer.left(), outer.top(), outer.width(), inner.top() - outer.top()),       # 上
+                        QRect(outer.left(), inner.bottom() + 1, outer.width(), outer.bottom() - inner.bottom()),  # 下
+                        QRect(outer.left(), inner.top(), inner.left() - outer.left(), inner.height()),    # 左
+                        QRect(inner.right() + 1, inner.top(), outer.right() - inner.right(), inner.height())]  # 右
         if self._bubble is not None:
             out.append(self._bubble.adjusted(-4, -4, 4, 4))
         if self._caption_rect is not None:

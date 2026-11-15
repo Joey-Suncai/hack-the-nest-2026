@@ -26,11 +26,13 @@ from PyQt6.QtWidgets import QApplication
 
 from showme import api, apps, capture, enroll, ocr, wording
 from showme.change import ChangeDetector, mask_rects
-from showme.config import DEBUG_DETECT, HIGHLIGHT_PAD, LOG, MIC_MAX_S, POLL_S, TALK_MAX_S
+from showme.config import (CLICK_EXTRA_PAD, CLICK_SETTLE_S, DEBUG_DETECT, HIGHLIGHT_PAD, LOG, MIC_MAX_S, POLL_S,
+                           TALK_MAX_S, TYPE_IDLE_S)
 from showme.coords import box_to_rect, expand, same_target
 from showme.i18n import t
 from showme.agent import AgentSession, MainThread
 from showme.hotkey import RightOptionMonitor
+from showme.inputwatch import InputWatcher, TypingTracker, click_in_rect, is_typing_step
 from showme.narrator import Narrator
 from showme.recorder import Recorder
 
@@ -114,6 +116,14 @@ class Controller(QObject):
         self.talk_timer = QTimer(self)  # 忘了按结束，30 秒自动结束
         self.talk_timer.setSingleShot(True)
         self.talk_timer.timeout.connect(lambda: self.end_talk("30 秒自动结束"))
+        # 「这一步做完了」：点击 / 打字 / 画面变化，都走 _step_completed，一步只算一次
+        self._step_done = True  # 还没有框时也算「做完了」，任何触发都忽略
+        self._step_reason = None
+        self._click_due = None  # 点了框里：这个时刻之后再截图（让软件反应）
+        self._typing_step = False
+        self.typing = TypingTracker(TYPE_IDLE_S)
+        self.inputs = InputWatcher(self._on_click, self._on_key)
+        self.inputs.start()
         self.hotkey = RightOptionMonitor(self.toggle_talk)
         if not self.hotkey.start():
             self.panel.add_message("assistant", t("ax_needed"))
@@ -351,6 +361,7 @@ class Controller(QObject):
         self._token += 1
         self.poll.stop()
         self.app_timer.stop()
+        self.inputs.stop()
         self.narrator.stop()
         if self.recorder.recording:
             self.recorder.stop()
@@ -461,7 +472,8 @@ class Controller(QObject):
 
     def _speed_log(self, how: str):
         if self._t_change is not None:
-            print(f"[speed] 画面变化 → 出框 {(time.perf_counter() - self._t_change) * 1000:.0f} ms（{how}）", flush=True)
+            ms = (time.perf_counter() - self._t_change) * 1000
+            print(f"[step] {self._step_reason or '画面变化'} → 出框 {ms:.0f} ms（{how}）", flush=True)
 
     def _on_result(self, r: dict, source: str | None = None):
         dbg(f"_on_result status={r.get('status')} source={source} state={self.state} box={r.get('box')}")
@@ -530,7 +542,15 @@ class Controller(QObject):
         self._base_raw = capture.to_small_gray(base_img) if base_img is not None else None
         self._masks: list[tuple[int, int, int, int]] = []
         self._t_change = None
+        self._step_done = False
+        self._step_reason = None
+        self._click_due = None
+        self.typing.reset()
+        cur = self.current or {}
+        self._typing_step = bool(self.last_instruction) and is_typing_step(
+            self.last_instruction, cur.get("expect"), cur.get("target_label"))
         self.poll.start()
+        dbg(f"_wait：打字步骤={self._typing_step}")
         dbg(f"_wait：开始等画面变化 state={self.state} 基准帧={'用请求截图' if base_img is not None else '下一帧'} "
             f"轮询在跑={self.poll.isActive()} _typing={self._typing} 来源={getattr(self, '_result_source', None)}")
 
@@ -562,6 +582,18 @@ class Controller(QObject):
         if self.state != WAITING:
             dbg(f"_on_poll：state={self.state}，不检测")
             return
+        if self._click_due is not None:  # 点了框里，等软件反应完再截图
+            if time.monotonic() >= self._click_due:
+                self._click_due = None
+                self._on_screen_changed()
+            return
+        if self._step_done:
+            return
+        if self._typing_step:
+            how = self.typing.done()
+            if how:
+                self._step_completed("typing", detail=how)
+                return
         try:
             raw = capture.to_small_gray(capture.grab())
         except Exception as e:  # noqa: BLE001
@@ -581,12 +613,42 @@ class Controller(QObject):
             dbg(f"poll diff={self.detector.last_diff:.4f} 阈值={self.detector.threshold} 已变化={self.detector._changed} "
                 f"稳定帧={self.detector._stable} 遮罩≈{masked * 100:.0f}% 遮罩数={len(self._masks)} _typing={self._typing} 触发={fired}")
         if fired:
+            self._step_completed("screen_change")
+
+    def _step_completed(self, reason: str, detail: str | None = None):
+        """点击 / 打字 / 画面变化 → 这一步做完了。一步只算一次，直到下一步的框出来。"""
+        if self.state != WAITING or self._step_done:
+            dbg(f"[step] 忽略重复触发 {reason}（state={self.state} 已完成={self._step_done}）")
+            return
+        self._step_done = True
+        self._step_reason = reason
+        self._t_change = time.perf_counter()
+        print(f"[step] 完成（{reason}{'/' + detail if detail else ''}）：{self.last_instruction!r}", flush=True)
+        if reason == "click":
+            self._click_due = time.monotonic() + CLICK_SETTLE_S  # 轮询里到点再截图
+        else:
             self._on_screen_changed()
+
+    def _on_click(self, x: float, y: float):
+        """全局左键按下（用户点的是别的 App）。点在当前框里 = 这一步完成。"""
+        if self.state != WAITING or self._step_done or self.overlay._rect is None:
+            return
+        r = self.overlay._rect
+        if click_in_rect((x, y), (r.x(), r.y(), r.width(), r.height()), CLICK_EXTRA_PAD):
+            self._step_completed("click")
+        else:
+            dbg(f"点在框外 ({x:.0f}, {y:.0f})，不算完成")
+
+    def _on_key(self, is_return: bool):
+        """全局按键：只记时间和是不是回车，不记内容。"""
+        if self.state == WAITING and self._typing_step and not self._step_done:
+            self.typing.key(is_return)
 
     def _on_screen_changed(self):
         dbg(f"_on_screen_changed ✅ 触发：state={self.state} last_instruction={self.last_instruction!r} next_guess={self._guess!r}")
         self._result_source = None
-        self._t_change = time.perf_counter()
+        if self._t_change is None:
+            self._t_change = time.perf_counter()
         if self.last_instruction:
             self.history.append({"instruction": self.last_instruction, "ok": True})
         guess = self._guess if isinstance(self._guess, dict) else ({"label": self._guess} if isinstance(self._guess, str) else None)

@@ -45,6 +45,9 @@ STABLE_FRAMES = 1  # 变化后连续几帧不动，才算用户这一步做完�
 
 # ---- 高亮样式（光圈）----
 HIGHLIGHT_PAD = 12  # 框比目标元素四周大多少（逻辑像素）
+CLICK_EXTRA_PAD = 8  # 判断「点在框里」时，画出来的框四周再放宽多少
+CLICK_SETTLE_S = 0.4  # 点了框里的东西后等多久再截图（让软件反应）
+TYPE_IDLE_S = 1.2  # 打字步骤：最后一次按键后多久没再按，算打完了
 HIGHLIGHT_COLOR = "#FF2D78"  # 框和光晕的颜色
 BORDER_WIDTH = 4  # 实线边框粗细
 CORNER_RADIUS = 10  # 圆角
