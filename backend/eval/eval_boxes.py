@@ -77,10 +77,9 @@ def main():
         app, goal, history = c["app"], c["goal"], c.get("history", [])
         if lang == "en":
             app, goal, history = c.get("app_en", app), c.get("goal_en", goal), c.get("history_en", history)
-        body = steps.NextStepIn(
-            app=app, goal=goal, lang=lang, screenshot=b64,
-            history=[steps.HistoryItem(instruction=h, ok=True) for h in history],
-        )
+        items = [steps.HistoryItem(**h) for h in c["history_items"]] if c.get("history_items") else \
+            [steps.HistoryItem(instruction=h, ok=True) for h in history]
+        body = steps.NextStepIn(app=app, goal=goal, lang=lang, screenshot=b64, history=items)
         t0 = time.perf_counter()
         try:
             out = steps.next_step(body)
@@ -95,10 +94,14 @@ def main():
         hit, score = False, 0.0
         if want_status:
             hit = bool(out) and out.status == want_status
+        elif c.get("accept_unsure") and out and out.status == "unsure":
+            hit = True
         elif out and out.box:
             cy, cx = (out.box[0] + out.box[2]) / 2, (out.box[1] + out.box[3]) / 2
             hit = truth[0] <= cy <= truth[2] and truth[1] <= cx <= truth[3]
             score = iou(out.box, truth)
+        if hit and c.get("avoid_label") and out and c["avoid_label"].lower() in (out.target_label or "").lower():
+            hit = False
         hits += hit
         by_group.setdefault(c.get("group", "tuned"), []).append((hit, dt))
         if not want_status:
@@ -110,10 +113,10 @@ def main():
             detail += f" guess={g.label!r}"
         if c.get("next_label"):
             guess_checked += 1
-            ok = bool(g) and (c["next_label"].lower() in g.label.lower() or g.label.lower() in c["next_label"].lower())
+            ok = bool(g) and (c["next_label"] in g.label or g.label in c["next_label"])  # 区分大小写：OCR 要精确匹配
             guess_ok += ok
             detail += " (guess ✅)" if ok else " (guess ❌)"
-        print(f"{'✅' if hit else '❌'} {c['file']:<32} IoU={score:.2f} {dt:5.1f}s  {detail}")
+        print(f"{'✅' if hit else '❌'} {(c['file'] + (':' + c['name'] if c.get('name') else '')):<32} IoU={score:.2f} {dt:5.1f}s  {detail}")
         if out:
             words = len(out.instruction.split()) if lang == "en" else len(out.instruction)
             unit = "words" if lang == "en" else "字"

@@ -75,7 +75,7 @@ def main():
         mark = "✅" if got == want else "❌"
         print(f"{mark} [{lang}] {msg[:44]:<46} 期望 {want:<8} 得到 {got:<8} {dt:4.1f}s\n     {detail}")
     n = len(TESTS)
-    print(f"\n模型 {gemini.MODEL}：action 准确率 {hits}/{n} = {hits / n:.0%}，平均耗时 {sum(times) / n:.1f}s，最慢 {max(times):.1f}s")
+    print(f"\n模型 {gemini.MODEL}（thinking={chat.THINKING or 'default'}）：action 准确率 {hits}/{n} = {hits / n:.0%}，平均耗时 {sum(times) / n:.1f}s，最慢 {max(times):.1f}s")
 
 
 if __name__ == "__main__":

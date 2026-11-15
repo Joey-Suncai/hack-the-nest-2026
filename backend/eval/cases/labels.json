@@ -422,5 +422,32 @@
       506,
       466
     ]
+  },
+  {
+    "file": "vscode_clone_1.jpg",
+    "app": "VS Code",
+    "goal": "Clone the GitHub repo https://github.com/octocat/Hello-World",
+    "lang": "en",
+    "history": [],
+    "target_px": [
+      240,
+      407,
+      406,
+      429
+    ],
+    "name": "loop",
+    "group": "regression",
+    "history_items": [
+      {
+        "instruction": "Click Show All Commands on the Welcome page.",
+        "ok": false
+      },
+      {
+        "instruction": "Click Show All Commands on the Welcome page.",
+        "ok": false
+      }
+    ],
+    "accept_unsure": true,
+    "avoid_label": "Show All Commands"
   }
 ]
