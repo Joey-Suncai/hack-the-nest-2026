@@ -3,7 +3,7 @@
 import httpx
 
 from showme.config import API_BASE
-from showme.i18n import t
+from showme.i18n import get_lang, t
 
 
 class ApiError(Exception):
@@ -26,8 +26,10 @@ def _request(method: str, path: str, timeout: float, **kw) -> httpx.Response:
         try:
             msg = r.json()["error"]
         except Exception:  # noqa: BLE001
-            msg = t("err_http", code=r.status_code)
-        raise ApiError(msg)
+            raise ApiError(t("err_http", code=r.status_code))
+        # 后端的 error 是中文：英文界面下显示通用英文提示，原文打印到终端方便调试
+        print(f"[api] {method} {path} → HTTP {r.status_code}: {msg}", flush=True)
+        raise ApiError(msg if get_lang() == "zh" else t("err_generic"))
     return r
 
 

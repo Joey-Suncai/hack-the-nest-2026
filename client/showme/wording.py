@@ -1,9 +1,28 @@
-"""开场白和结束语。想改说法直接改这里（会同时显示成字幕、读成语音）。"""
+"""开场白、结束语，以及朗读前的文字处理。想改说法直接改这里。"""
+
+import re
+
+_URL = re.compile(r"https?://\S+")
+
+
+def speakable(text: str) -> str:
+    """朗读用：网址读出来又长又难听，换成最后一段（https://github.com/octocat/Hello-World → Hello-World）。"""
+
+    def short(m):
+        url = m.group(0).rstrip(".,;:!?)」』”'\"")
+        parts = [p for p in url.split("/")[2:] if p]
+        tail = m.group(0)[len(url):]
+        return (parts[-1] if len(parts) > 1 else parts[0]) + tail if parts else m.group(0)
+
+    return _URL.sub(short, text)
 
 
 def intro(app: str, goal: str, lang: str = "zh", n_steps: int | None = None) -> str:
     if lang == "en":
-        s = f"I'll walk you through it in {app}: {goal}."
+        g = goal.strip().rstrip(".!")
+        if len(g) > 1 and g[1].islower():
+            g = g[0].lower() + g[1:]  # 「Clone the …」接在冒号后面改成小写
+        s = f"I'll walk you through it in {app}: {g}."
         if n_steps:
             s += f" About {n_steps} steps."
         return s + " Just follow the glowing box."

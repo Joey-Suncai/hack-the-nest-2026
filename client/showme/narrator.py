@@ -9,6 +9,7 @@ say(text, interrupt) 打断正在读的，清空队列（换到新的一步时�
 from PyQt6.QtCore import QObject, QTimer
 
 from showme import api, audio
+from showme.wording import speakable
 from showme.config import CAPTION_HOLD_S
 
 
@@ -62,7 +63,8 @@ class Narrator(QObject):
                     item.ready = True  # 语音拿不到也照样显示字幕
                     self._advance()
 
-            self.run_bg(lambda: api.speak(text, lang), got, failed)
+            spoken = speakable(text)
+            self.run_bg(lambda: api.speak(spoken, lang), got, failed)
         else:
             item.ready = True
         self._advance()
