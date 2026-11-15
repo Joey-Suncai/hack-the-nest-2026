@@ -941,6 +941,7 @@ class Controller(QObject):
         epoch, t0p = self._stop_epoch, time.perf_counter()
         goal = (params.get("goal") or "").strip()
         note = (params.get("note") or "").strip() or None
+        app = (params.get("app") or "").strip() or None  # Agent 说的软件（"Google Chrome"）；没有就让后端从目标推断
         current = self.main.call(lambda: self.last_instruction if (
             self.task is not None and self.state == WAITING and self.overlay._rect is not None
             and not self._user_turn_since_step and not note) else None)
@@ -950,7 +951,7 @@ class Controller(QObject):
         self.main.call(self._filler)
         t0 = time.time()
         try:
-            img, payload = self.main.call(lambda: self._tool_prepare(goal, note))
+            img, payload = self.main.call(lambda: self._tool_prepare(goal, note, app))
         except Exception as e:  # noqa: BLE001
             msg = str(e)
             return msg if msg.startswith("STOPPED:") else f"ERROR: could not take a screenshot ({e})"
@@ -979,7 +980,7 @@ class Controller(QObject):
         if self._turn is not None:
             self._turn.setdefault("tools", []).append((name, ms))
 
-    def _tool_prepare(self, goal: str, note: str | None):
+    def _tool_prepare(self, goal: str, note: str | None, app: str | None = None):
         """主线程：决定是不是新任务，截图，组 next-step 请求。"""
         if self.agent is None:
             raise RuntimeError("STOPPED: the user pressed Stop")
@@ -987,9 +988,12 @@ class Controller(QObject):
         self.poll.stop()
         self._provisional = None
         if self.task is None or (not note and goal and _different_goal(goal, self.task["goal"])):
-            self._start_task(apps.frontmost_app() or t("current_app"), goal or t("current_app"), None, request=False)
+            # 不再用「最前面的 App」当任务的软件：用户在 ShowMe / 终端 / 别的窗口里开口时会选错（日志：app='Claude'）
+            self._start_task(app or t("current_app"), goal or t("current_app"), None, request=False)
         elif goal:
             self.task["goal"] = goal
+        if app and self.task is not None:
+            self.task["app"] = app
         if note and self.last_instruction:  # 「做完了 / 点错了」：当前这步记进 history，带上 note 重新看
             self.history.append({"instruction": self.last_instruction, "ok": None})
         self.state = REQUESTING
