@@ -122,7 +122,8 @@ class Panel(QWidget):
         for b in (self.live_box, self.filter_box, self.tap_box):
             b.setObjectName("small")
         self.live_box.setChecked(True)
-        self.filter_box.setChecked(True)
+        from showme.config import VOICE_FILTER_DEFAULT
+        self.filter_box.setChecked(VOICE_FILTER_DEFAULT)
         from showme.config import TAP_TO_TALK_DEFAULT
         self.tap_box.setChecked(TAP_TO_TALK_DEFAULT)
         self.enroll_btn = QPushButton()
@@ -131,6 +132,7 @@ class Panel(QWidget):
         live_row.addWidget(self.live_box)
         live_row.addWidget(self.filter_box)
         live_row.addWidget(self.tap_box)
+        self.tap_box.hide()  # 现在固定是「按键说话」（右 Option / 麦克风按钮），不再需要这个开关
         live_row.addStretch()
         live_row.addWidget(self.enroll_btn)
 

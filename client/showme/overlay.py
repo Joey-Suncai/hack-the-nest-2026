@@ -127,6 +127,9 @@ class Overlay(QWidget):
         self._caption_font.setPixelSize(C.CAPTION_FONT_SIZE)
         self._caption_font.setWeight(QFont.Weight.Medium)
 
+        self._badge = ""  # 「Listening…」标签（收音时显示在屏幕下方中间：用户看着 VS Code，不一定看面板）
+        self._badge_rect: QRect | None = None
+
         self._clock = QElapsedTimer()
         self._clock.start()
         self._anim = QTimer(self)
@@ -159,6 +162,21 @@ class Overlay(QWidget):
         self._caption_rect = self._layout_caption()
         self.update(self._caption_rect.united(old) if old else self._caption_rect)
 
+    def show_badge(self, text: str) -> None:
+        old = self._badge_rect
+        self._badge = text
+        fm = QFontMetrics(self._caption_font)
+        w, h = fm.horizontalAdvance(text) + 64, C.CAPTION_FONT_SIZE + 26
+        screen = self.rect()
+        self._badge_rect = QRect(screen.center().x() - w // 2, screen.bottom() - C.CAPTION_BOTTOM - h, w, h)
+        self.update(self._badge_rect.united(old) if old else self._badge_rect)
+
+    def clear_badge(self) -> None:
+        old = self._badge_rect
+        self._badge, self._badge_rect = "", None
+        if old:
+            self.update(old)
+
     def clear_caption(self) -> None:
         old = self._caption_rect
         self._caption, self._caption_rect = "", None
@@ -175,6 +193,8 @@ class Overlay(QWidget):
             out.append(self._bubble.adjusted(-4, -4, 4, 4))
         if self._caption_rect is not None:
             out.append(self._caption_rect.adjusted(-8, -8, 8, 8))
+        if self._badge_rect is not None:
+            out.append(self._badge_rect.adjusted(-8, -8, 8, 8))
         return [(r.x(), r.y(), r.width(), r.height()) for r in out]
 
     @contextmanager
@@ -184,9 +204,9 @@ class Overlay(QWidget):
         不用 hide()：macOS 隐藏窗口有淡出动画，截图里会留下上一步光圈 / 气泡的残影（联调时发现的）。
         清空内容 + 立即重绘没有动画。
         """
-        saved = (self._rect, self._text, self._bubble, self._caption, self._caption_rect)
-        self._rect = self._bubble = self._caption_rect = None
-        self._text = self._caption = ""
+        saved = (self._rect, self._text, self._bubble, self._caption, self._caption_rect, self._badge, self._badge_rect)
+        self._rect = self._bubble = self._caption_rect = self._badge_rect = None
+        self._text = self._caption = self._badge = ""
         self._anim.stop()
         self.repaint()
         QApplication.processEvents()
@@ -199,6 +219,8 @@ class Overlay(QWidget):
                 self._rect, self._text, self._bubble = saved[:3]
             if self._caption_rect is None and not self._caption:
                 self._caption, self._caption_rect = saved[3], saved[4]
+            if self._badge_rect is None and not self._badge:
+                self._badge, self._badge_rect = saved[5], saved[6]
             if self._rect is not None and C.BREATHE_MS > 0:
                 self._anim.start(33)
             self.update()
@@ -259,6 +281,20 @@ class Overlay(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         if self._caption_rect is not None:
             self._paint_caption(p)
+        if self._badge_rect is not None:
+            r = self._badge_rect
+            p.setPen(Qt.PenStyle.NoPen)
+            bg = QColor(0, 0, 0)
+            bg.setAlphaF(0.8)
+            p.setBrush(bg)
+            p.drawRoundedRect(QRectF(r), r.height() / 2, r.height() / 2)
+            p.setBrush(QColor("#FF3B30"))
+            d = 12
+            p.drawEllipse(QRectF(r.x() + 20, r.center().y() - d / 2, d, d))
+            p.setPen(QColor("#FFFFFF"))
+            p.setFont(self._caption_font)
+            p.drawText(r.adjusted(40, 0, -16, 0), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self._badge)
+            p.setBrush(Qt.BrushStyle.NoBrush)
         if self._rect is None:
             p.end()
             return

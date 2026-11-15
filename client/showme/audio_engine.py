@@ -181,7 +181,9 @@ class FilteredAgentAudio(AudioInterface):
         self._running = False
         self.engine = None  # start() 里才建（SDK 在它自己的线程里调 start）
         self.started = threading.Event()
-        self.muted = False  # 按了 Stop：丢掉 Agent 还在发过来的声音，直到用户再开口
+        self.muted = False  # 用户在说话 / 按了 Stop：丢掉 Agent 发过来的声音
+        self.on_first_audio = None  # 计时：用户说完后 Agent 的第一段声音开始播放时回调（音频线程里）
+        self.await_first_audio = False
 
     # ---- SDK 要求的 4 个方法 ----
     def start(self, input_callback):
@@ -209,6 +211,10 @@ class FilteredAgentAudio(AudioInterface):
 
     def output(self, audio: bytes):
         if self.engine and not self.muted:
+            if self.await_first_audio:
+                self.await_first_audio = False
+                if self.on_first_audio:
+                    self.on_first_audio()
             self.engine.play(audio)
 
     def silence_now(self):

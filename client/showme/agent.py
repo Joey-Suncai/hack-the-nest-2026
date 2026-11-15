@@ -69,6 +69,7 @@ class AgentSession(QObject):
     user_said = pyqtSignal(str)
     agent_said = pyqtSignal(str)
     voice_event = pyqtSignal(str, object)  # ("duck" | "accept" | "reject", 分数)
+    first_audio = pyqtSignal()  # 用户说完后，Agent 的第一段声音开始播放（计时用）
 
     def __init__(self, tools: dict, lang: str = "en"):
         """tools：{"show_next_step": fn(params) -> str, "look_at_screen": fn(params) -> str}，在 SDK 线程里调用。"""
@@ -99,7 +100,9 @@ class AgentSession(QObject):
             scorer = SpeakerModel().embed if prints else None
             self.gate = Gate(scorer=scorer, voiceprint=prints or None)
             print(f"[voice] 声纹：{list(prints) or '没录（只用 VAD + 时长）'}，阈值 {self.gate.threshold}", flush=True)
+            self.gate.push_to_talk = True  # 按键说话：只有按了右 Option 才发麦克风声音，不做 VAD / 声纹
             self.audio = FilteredAgentAudio(self.gate, on_event=lambda k, s: self.voice_event.emit(k, s))
+            self.audio.on_first_audio = self.first_audio.emit
             tools = ClientTools()
             for name, fn in self.tools.items():
                 tools.register(name, self._wrap(name, fn))

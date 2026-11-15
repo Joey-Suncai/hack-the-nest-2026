@@ -26,10 +26,11 @@ from PyQt6.QtWidgets import QApplication
 
 from showme import api, apps, capture, enroll, ocr, wording
 from showme.change import ChangeDetector, mask_rects
-from showme.config import DEBUG_DETECT, HIGHLIGHT_PAD, LOG, MIC_MAX_S, POLL_S
+from showme.config import DEBUG_DETECT, HIGHLIGHT_PAD, LOG, MIC_MAX_S, POLL_S, TALK_MAX_S
 from showme.coords import box_to_rect, expand, same_target
 from showme.i18n import t
 from showme.agent import AgentSession, MainThread
+from showme.hotkey import RightOptionMonitor
 from showme.narrator import Narrator
 from showme.recorder import Recorder
 
@@ -106,7 +107,16 @@ class Controller(QObject):
         self.main = MainThread()  # Agent 的 client tool 在 SDK 线程里跑，碰界面 / 截图要转到主线程
         self.agent: AgentSession | None = None
         self._enrolling = False
-        self._stopped = False  # 按了 Stop：Agent 的 tool 调用一律返回 STOPPED，直到用户再开口 / 打字
+        self._stop_epoch = 0  # 每按一次 Stop +1：在这之前开始的 tool 调用 / 请求，结果回来一律丢掉
+        self._talking = False  # 按键说话：正在收音
+        self._pending_after_connect = None  # 硬停止后用户按键 / 打字 → 重新连接，连上后再做这件事
+        self._turn = None  # 计时：{"end": 按结束键的时刻, ...}
+        self.talk_timer = QTimer(self)  # 忘了按结束，30 秒自动结束
+        self.talk_timer.setSingleShot(True)
+        self.talk_timer.timeout.connect(lambda: self.end_talk("30 秒自动结束"))
+        self.hotkey = RightOptionMonitor(self.toggle_talk)
+        if not self.hotkey.start():
+            self.panel.add_message("assistant", t("ax_needed"))
         self._log_dir = None
         self._n_req = 0
         self._n_log = 0
@@ -137,10 +147,14 @@ class Controller(QObject):
         self.lang = self.panel.lang()
         self.panel.add_message("user", text)
         if self.agent and self.agent.active:  # 实时语音模式：打字也交给 Agent（同一个「大脑」）
-            self._resume_after_stop()
             self._remember("user", text)
             if not self.agent.send(text):
                 self.panel.set_error(t("live_unavailable"))
+            return
+        if self.panel.live_box.isChecked() and self.agent is None:  # 硬停止后：用户打字 = 新任务，重新连接后再发
+            self._remember("user", text)
+            self._pending_after_connect = lambda: self.agent.send(text)
+            self.set_live(True)
             return
         self._interrupted_request = self.state == REQUESTING
         if self.task is not None:  # 指导中途插话：先停检测，丢掉还没回来的 next-step
@@ -229,8 +243,8 @@ class Controller(QObject):
 
     # ================= 语音输入 =================
     def toggle_mic(self):
-        if self.agent and self.agent.active:
-            self._toggle_talk()
+        if self.panel.live_box.isChecked():
+            self.toggle_talk()
             return
         if self.recorder.recording:
             self._stop_recording()
@@ -312,18 +326,25 @@ class Controller(QObject):
         self.panel.set_status(status)
 
     def stop(self):
-        """面板上的「停止」按钮。实时语音模式下也要让 Agent 立刻安静、不再自己开始新任务。"""
-        if self.agent and self.agent.active:
-            self._stopped = True
-            self.agent.hush()
-            print("[agent] Stop：本地静音，Agent 已通知停下等待", flush=True)
+        """面板上的「停止」按钮 = 硬停止：结束 Agent 会话、清框、停轮询 / 播放 / 收音。
+        之前开始的 tool 调用和请求，结果回来一律丢掉；只有用户再按右 Option 或打字才会重新连接。"""
+        self._stop_epoch += 1
+        self._pending_after_connect = None
+        self._set_talking(False)
+        if self.agent:
+            if self.agent.audio:
+                self.agent.audio.silence_now()
+            self.agent.stop()
+            self.agent = None
+            self.narrator.muted = False
+            print(f"[agent] 硬停止 #{self._stop_epoch}：会话已结束", flush=True)
         self.narrator.stop()
         if self.recorder.recording:
             self.recorder.stop()
             self.panel.set_recording(False)
         self._chat_busy = False
         self.panel.set_busy(False)
-        self._end_task(t("stopped"))
+        self._end_task(t("stopped_hard") if self.panel.live_box.isChecked() else t("stopped"))
 
     def shutdown(self):
         """退出前调用：停掉轮询、语音、录音，后面回来的请求结果都丢掉。"""
@@ -335,6 +356,7 @@ class Controller(QObject):
             self.recorder.stop()
         if self.agent:
             self.agent.stop()
+        self.hotkey.stop()
 
     def retry(self):
         if self.task is not None and self.state in (PAUSED, WAITING) and not self._chat_busy:
@@ -629,6 +651,7 @@ class Controller(QObject):
             self.agent.user_said.connect(self._on_agent_user)
             self.agent.agent_said.connect(self._on_agent_reply)
             self.agent.voice_event.connect(self._on_voice_event)
+            self.agent.first_audio.connect(self._on_first_audio)
             self.panel.set_status(t("live_connecting"))
             self.agent.start()
         elif not on and self.agent:
@@ -648,28 +671,47 @@ class Controller(QObject):
             self.panel.add_message("assistant", t("no_voiceprint"))
         if g:
             g.filter_enabled = self.panel.filter_box.isChecked()
-            g.push_to_talk = self.panel.tap_box.isChecked()
+            g.push_to_talk = True  # 按键说话
+        pending, self._pending_after_connect = self._pending_after_connect, None
+        if pending:
+            pending()
+        elif not self.task:
+            self.panel.add_message("assistant", t("ready_talk"))
 
     def _on_agent_failed(self, why: str):
         self.agent = None
+        self._pending_after_connect = None
+        self._set_talking(False)
         self.narrator.muted = False
         self.panel.set_live_state(False)
         self.panel.set_error(t("live_unavailable"))
         print(f"[agent] 退回打字模式：{why}", flush=True)
 
-    def _resume_after_stop(self):
-        if self._stopped:
-            self._stopped = False
-            if self.agent:
-                self.agent.unhush()
-            print("[agent] 用户又开口了：取消 Stop 状态", flush=True)
+    def _timing(self, what: str):
+        """计时：按结束键 → 转写 → 回复文字 → 第一段声音。"""
+        if self._turn is None:
+            return
+        ms = (time.perf_counter() - self._turn["end"]) * 1000
+        if what not in self._turn:
+            self._turn[what] = ms
+        if what == "first_audio":
+            tr, rp = self._turn.get("transcript"), self._turn.get("reply")
+            tools = ", ".join(f"{n} {d:.0f}ms" for n, d in self._turn.get("tools", [])) or "无"
+            print(f"[timing] 按结束键 → 转写 {tr:.0f}ms → 回复文字 {rp:.0f}ms → 第一段声音 {ms:.0f}ms（tool：{tools}）"
+                  if tr is not None and rp is not None else f"[timing] 按结束键 → 第一段声音 {ms:.0f}ms（转写 {tr}，回复 {rp}，tool：{tools}）",
+                  flush=True)
+            self._turn = None
+
+    def _on_first_audio(self):
+        self._timing("first_audio")
 
     def _on_agent_user(self, text: str):
-        self._resume_after_stop()
+        self._timing("transcript")
         self.panel.add_message("user", text)
         self._remember("user", text)
 
     def _on_agent_reply(self, text: str):
+        self._timing("reply")
         if text.strip():
             self.panel.add_message("assistant", text)
             self._remember("assistant", text)
@@ -680,7 +722,6 @@ class Controller(QObject):
         elif kind == "reject":
             self.panel.set_status(t("ignored_voice"))
         elif kind == "accept":
-            self._resume_after_stop()
             self.panel.set_status(t("listening_agent"))
 
     def _agent_notify(self, text: str, kind: str):
@@ -693,8 +734,7 @@ class Controller(QObject):
 
     # ---- client tools（在 SDK 线程里调用）----
     def tool_show_next_step(self, params: dict) -> str:
-        if self._stopped:
-            return "STOPPED: the user pressed Stop"
+        epoch, t0p = self._stop_epoch, time.perf_counter()
         goal = (params.get("goal") or "").strip()
         note = (params.get("note") or "").strip() or None
         t0 = time.time()
@@ -709,12 +749,24 @@ class Controller(QObject):
             self.main.call(lambda: self._on_error(e))
             return f"ERROR: {e.message}"
         self._log_turn("next", img, payload, r, t0)
+        self._tool_time("show_next_step", t0p)
+        if epoch != self._stop_epoch:  # 等 Gemini 时用户按了 Stop：不画框、不念
+            print("[agent] show_next_step 结果回来时已经按了 Stop，丢掉", flush=True)
+            return "STOPPED: the user pressed Stop"
         self.main.call(lambda: self._on_result(r, source="tool"))
         status, text = r.get("status"), r.get("instruction") or ""
         return text if status == "next" else f"{'DONE' if status == 'done' else 'UNSURE'}: {text}"
 
+    def _tool_time(self, name: str, t0: float):
+        ms = (time.perf_counter() - t0) * 1000
+        print(f"[timing] tool {name} {ms:.0f}ms", flush=True)
+        if self._turn is not None:
+            self._turn.setdefault("tools", []).append((name, ms))
+
     def _tool_prepare(self, goal: str, note: str | None):
         """主线程：决定是不是新任务，截图，组 next-step 请求。"""
+        if self.agent is None:
+            raise RuntimeError("STOPPED: the user pressed Stop")
         self._token += 1  # 丢掉还没回来的 next-step / OCR
         self.poll.stop()
         self._provisional = None
@@ -738,8 +790,7 @@ class Controller(QObject):
         return img, payload
 
     def tool_look_at_screen(self, params: dict) -> str:
-        if self._stopped:
-            return "STOPPED: the user pressed Stop"
+        epoch, t0p = self._stop_epoch, time.perf_counter()
         q = (params.get("question") or "").strip() or "What is on the screen?"
         t0 = time.time()
         try:
@@ -750,6 +801,9 @@ class Controller(QObject):
         except Exception as e:  # noqa: BLE001
             return f"ERROR: {e}"
         self._log_turn("chat", img, payload, r, t0)
+        self._tool_time("look_at_screen", t0p)
+        if epoch != self._stop_epoch:
+            return "STOPPED: the user pressed Stop"
         return r.get("reply") or "I'm not sure."
 
     def _tool_chat_prepare(self, q: str):
@@ -766,25 +820,83 @@ class Controller(QObject):
         print(f"[voice] 声纹过滤 {'开' if on else '关'}", flush=True)
 
     def _set_tap_to_talk(self, on: bool):
-        """「点一下开始收音、再点一下结束」模式（现场太吵时用）。"""
-        if self.agent and self.agent.gate:
-            self.agent.gate.push_to_talk = on
-            self.agent.gate.key_down = False
-        self.panel.set_talking(False)
-        print(f"[voice] 点按收音 {'开' if on else '关'}", flush=True)
+        """旧开关（已隐藏）：现在固定是按键说话。"""
 
-    def _toggle_talk(self):
-        g = self.agent.gate if self.agent else None
-        if not g:
+    # ---- 按键说话：右 Option / 麦克风按钮，按一下开始、再按一下结束 ----
+    def toggle_talk(self):
+        if self._talking:
+            self.end_talk("按键")
+        else:
+            self.start_talk()
+
+    def start_talk(self):
+        if not self.panel.live_box.isChecked():
+            self.toggle_mic_fallback()
             return
-        if not g.push_to_talk:  # 没开点按模式时，麦克风按钮直接切到点按模式并开始收音
-            g.push_to_talk = True
-            self.panel.tap_box.setChecked(True)
-        g.key_down = not g.key_down
-        if g.key_down:
-            self._resume_after_stop()
-        self.panel.set_talking(g.key_down)
-        print(f"[voice] 收音 {'开始' if g.key_down else '结束'}", flush=True)
+        if self.agent is None:  # 硬停止后 / 还没连：用户按键 = 新任务，先连接，连上后开始收音
+            self._pending_after_connect = self.start_talk
+            self.set_live(True)
+            return
+        if not self.agent.active or not self.agent.gate:
+            return
+        self._talking = True
+        self._turn = None
+        if self.agent.audio:  # Agent 正在说话 → 立刻停掉本地播放，用户说话期间丢掉它的声音
+            self.agent.audio.silence_now()
+        self._set_talking(True)
+        self.talk_timer.start(TALK_MAX_S * 1000)
+        delay = _play_sound("Tink")  # 提示音不走回声消除：放完再开始发麦克风声音，免得被当成用户说的话
+        gate = self.agent.gate
+        QTimer.singleShot(int(delay * 1000) + 60, lambda: self._open_mic(gate))
+        print("[voice] 收音 开始", flush=True)
+
+    def _open_mic(self, gate):
+        if self._talking and self.agent and self.agent.gate is gate:
+            gate.key_down = True
+
+    def end_talk(self, why: str = ""):
+        if not self._talking:
+            return
+        self._talking = False
+        self.talk_timer.stop()
+        if self.agent and self.agent.gate:
+            self.agent.gate.key_down = False  # 立刻改发静音帧：ElevenLabs 马上判断这句话说完了
+        if self.agent and self.agent.audio:
+            self.agent.audio.muted = False
+            self.agent.audio.await_first_audio = True
+        self._turn = {"end": time.perf_counter()}
+        self._set_talking(False)
+        _play_sound("Pop")
+        print(f"[voice] 收音 结束（{why}）", flush=True)
+
+    def _set_talking(self, on: bool):
+        if not on:
+            self._talking = False
+            self.talk_timer.stop()
+            if self.agent and self.agent.gate:
+                self.agent.gate.key_down = False
+        self.panel.set_talking(on)
+        if on:
+            self.overlay.show_badge(t("listening_badge"))
+        else:
+            self.overlay.clear_badge()
+
+    def toggle_mic_fallback(self):
+        """实时语音关着时，麦克风按钮还是原来的「录一句 → 转文字 → /api/chat」。"""
+        if self.recorder.recording:
+            self._stop_recording()
+            return
+        self.narrator.stop()
+        self.poll.stop()
+        try:
+            self.recorder.start()
+        except Exception as e:  # noqa: BLE001
+            self.panel.set_error(t("mic_failed", e=e))
+            if self.state == WAITING:
+                self._wait()
+            return
+        self.panel.set_recording(True)
+        self.mic_timer.start(MIC_MAX_S * 1000)
 
     # ---- 录入声纹（面板按钮）----
     def enroll_voice(self, name: str):
@@ -831,6 +943,20 @@ class Controller(QObject):
                 self.panel.live_box.setChecked(True)  # 重新连接，会加载新声纹
 
         self._bg_free(work, ok, fail)
+
+
+def _play_sound(name: str) -> float:
+    """播放系统提示音（NSSound），返回时长（秒）。出错返回 0。"""
+    try:
+        from AppKit import NSSound
+
+        s = NSSound.soundNamed_(name)
+        if s is None:
+            return 0.0
+        s.play()
+        return float(s.duration())
+    except Exception:  # noqa: BLE001
+        return 0.0
 
 
 def _different_goal(a: str, b: str) -> bool:
