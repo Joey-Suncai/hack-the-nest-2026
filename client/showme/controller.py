@@ -25,9 +25,9 @@ from pathlib import Path
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
-from showme import api, apps, ax_snap, capture, enroll, ocr, sync, wording
+from showme import api, apps, ax_snap, ax_tree, capture, enroll, ocr, sync, wording
 from showme.change import ChangeDetector, _diff, mask_rects
-from showme.config import (CHANGE_THRESHOLD, CLICK_EXTRA_PAD, DEBUG_DETECT, HIGHLIGHT_PAD, LOG, MIC_MAX_S, POLL_S,
+from showme.config import (AX_ELEMENTS, CHANGE_THRESHOLD, CLICK_EXTRA_PAD, DEBUG_DETECT, HIGHLIGHT_PAD, LOG, MIC_MAX_S, POLL_S,
                            NEAR_CLICK_PT, SETTLE_MAX_S, SETTLE_MIN_S, SETTLE_NOCHANGE_MAX_S, SETTLE_POLL_S, TALK_MAX_S)
 from showme.coords import box_to_rect, expand, same_target
 from showme.i18n import t
@@ -156,6 +156,8 @@ class Controller(QObject):
         panel.retry_requested.connect(self.retry)
         panel.add_message("assistant", t("welcome"))
         self._bg_free(ocr.warmup, lambda ms: print(f"[ocr] 热身完成 {ms:.0f} ms", flush=True), lambda e: None)
+        if AX_ELEMENTS:  # PyObjC 第一次调 AX 要 ~300 ms：启动时在后台先跑一遍，第一步请求就不慢了
+            self._bg_free(lambda: ax_tree.collect(None, self._screen_wh, log=False), lambda _: None, lambda e: None)
 
     # ================= 对话 =================
     def on_user_message(self, text: str):
@@ -443,8 +445,9 @@ class Controller(QObject):
         t0 = time.time()
 
         def call():
+            self._add_elements(payload)
             r = api.next_step({**payload, "screenshot": capture.to_jpeg_b64(img)})
-            r = ax_snap.snap_result(r, self._screen_wh)  # Dock 图标：换成 Accessibility 的精确框
+            r = self._after_next(r, payload)
             self._log_turn("next", img, payload, r, t0)
             return r
 
@@ -453,6 +456,27 @@ class Controller(QObject):
             self._on_error(e)
 
         self._bg(call, self._on_result, failed)
+
+    def _add_elements(self, payload: dict):
+        """后台线程，截图之后马上调：目标 App 能点的控件（AX 精确框）放进 payload["elements"]（日志里也会有）。
+        AX 不可用 / 什么都没读到 → 不带这个字段。"""
+        if not AX_ELEMENTS:
+            return
+        els = ax_tree.collect(payload.get("app"), self._screen_wh)
+        if els:
+            payload["elements"] = els
+
+    def _after_next(self, r: dict, payload: dict) -> dict:
+        """后台线程：记一行 Gemini 选了哪个控件；没选控件时 Dock 图标换成 Accessibility 的精确框。"""
+        try:
+            line = ax_tree.chosen_line(r, payload.get("elements"))
+            if line:
+                print(line, flush=True)
+            if payload.get("elements") and isinstance(r, dict) and isinstance(r.get("element_id"), int):
+                return r  # 后端已经用控件的精确框了
+        except Exception:  # noqa: BLE001
+            pass
+        return ax_snap.snap_result(r, self._screen_wh)
 
     def _log_turn(self, kind: str, img, payload: dict, r: dict, t0: float):
         """SHOWME_LOG=1：存每一次请求的截图 + 请求（不含截图）+ 返回 + 耗时，方便联调复盘。后台线程里调用。"""
@@ -959,6 +983,7 @@ class Controller(QObject):
         except Exception as e:  # noqa: BLE001
             msg = str(e)
             return msg if msg.startswith("STOPPED:") else f"ERROR: could not take a screenshot ({e})"
+        self._add_elements(payload)  # 这里已经在 Agent 的线程里，不占主线程
         try:
             r = api.next_step({**payload, "screenshot": capture.to_jpeg_b64(img)})
         except api.ApiError as e:
@@ -967,7 +992,7 @@ class Controller(QObject):
             return f"ERROR: {_english(e)}"
         except Exception as e:  # noqa: BLE001
             return f"ERROR: {e}"
-        r = ax_snap.snap_result(r, self._screen_wh)  # Dock 图标：换成 Accessibility 的精确框
+        r = self._after_next(r, payload)
         self._log_turn("next", img, payload, r, t0)
         self._tool_time("show_next_step", t0p)
         if epoch != self._stop_epoch:  # 等 Gemini 时用户按了 Stop：不画框、不念
