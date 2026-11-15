@@ -1190,7 +1190,7 @@ class Controller(QObject):
         self._token += 1  # 丢掉还没回来的 next-step / OCR
         self.poll.stop()
         self._provisional = None
-        if self.task is None or (not note and goal and _different_goal(goal, self.task["goal"])):
+        if self.task is None or _starts_new_task(self.task["goal"], goal, note):
             # 不再用「最前面的 App」当任务的软件：用户在 ShowMe / 终端 / 别的窗口里开口时会选错（日志：app='Claude'）
             self._start_task(app or t("current_app"), goal or t("current_app"), None, request=False)
         elif goal:
@@ -1430,6 +1430,25 @@ def _play_sound(name: str) -> float:
         return float(s.duration())
     except Exception:  # noqa: BLE001
         return 0.0
+
+
+_PROGRESS_NOTE = re.compile(r"\b(done|finished|did (it|that)|wrong|mistake|skip|stuck|clicked|repeat|again|next|"
+                            r"opened|signed in|logged in|can't find|cannot find|where)\b", re.IGNORECASE)
+
+
+def _starts_new_task(current_goal: str, goal: str | None, note: str | None) -> bool:
+    """Agent 调 show_next_step 时：是新任务，还是同一个任务的下一步？
+    - 目标明显不同、没有 note → 新任务
+    - 目标明显不同、note 是「在纠正目标」（Agent 的规则：用户重复 / 换说法）→ 新任务。
+      以前带 note 一律不算新任务，结果改成 Canvas 之后，Spotify 的历史和计划还一直发给后端（日志）
+    - note 是进度（做完了 / 点错了 / 跳过 / 卡住了……）→ 同一个任务，哪怕措辞变了"""
+    if not goal or not _different_goal(goal, current_goal):
+        return False
+    if not note:
+        return True
+    if "correct" in note.lower():
+        return True
+    return not _PROGRESS_NOTE.search(note)
 
 
 def _different_goal(a: str, b: str) -> bool:

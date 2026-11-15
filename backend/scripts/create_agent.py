@@ -29,13 +29,20 @@ TOOLS = [
         "name": "show_next_step",
         "description": "Take a screenshot of the user's screen, work out the next thing they should click to reach the goal, "
                        "highlight it on screen, and return the instruction to say. Call it when a task starts, and whenever "
-                       "the user says they finished, skipped, clicked the wrong thing, or are stuck.",
+                       "the user says they finished, skipped, clicked the wrong thing, or are stuck. Each new request is a fresh task: "
+                       "take goal and app from the user's latest words. If a name could mean two different things "
+                       "(e.g. the Canvas app vs Spotify's Canvas feature), ask one short question first instead of calling this.",
         "parameters": {
             "type": "object",
             "properties": {
-                "goal": {"type": "string", "description": "What the user wants to accomplish, short and specific (keep URLs, file names, app names)."},
-                "note": {"type": "string", "description": "Optional: what the user just said about their progress, e.g. 'user clicked the wrong thing'."},
-                "app": {"type": "string", "description": "The app the task happens in, by its usual name, e.g. 'Google Chrome', 'Zoom', 'Microsoft Excel'. Use what the user named, or the obvious app for the goal. Never ShowMe or this conversation."},
+                "goal": {"type": "string", "description": "The user's LATEST request in their own words, short and specific (keep URLs, file names, app names). "
+                                                        "Never merge it with an older task or add the previous task's app: 'use Canvas' said during a Spotify task is 'use Canvas', not 'use Canvas in Spotify'."},
+                "note": {"type": "string", "description": "Optional: what the user just said about their progress, e.g. 'user clicked the wrong thing'. "
+                                                        "If the user repeated or rephrased their request, write 'user is correcting the goal'."},
+                "app": {"type": "string", "description": "Optional. The app the task happens in, by its usual name, e.g. 'Google Chrome', 'Zoom', 'Canvas'. "
+                                                       "Only if the user named it in their latest request or it is clearly implied; do not carry over the previous task's app for a new request. "
+                                                       "'software' / 'app' means the native app; 'website' / 'in Chrome' means 'Google Chrome'. "
+                                                       "If unsure, leave it empty. Never 'Dock', 'Finder', 'ShowMe' or this conversation unless the task is about them."},
             },
             "required": ["goal"],
         },
