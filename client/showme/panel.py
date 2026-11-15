@@ -99,6 +99,7 @@ class Panel(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         self.setStyleSheet(STYLE)
         self.setFixedSize(PANEL_W, PANEL_H)
+        self._blanked = False
 
         # ---- 顶部：标题 + 语音开关 + 语言 ----
         self.title = QLabel("ShowMe")
@@ -214,6 +215,24 @@ class Panel(QWidget):
         apply_macos_window_settings(self)
 
     # ---- 设置 ----
+    def showEvent(self, ev):
+        super().showEvent(ev)
+        if self._blanked:
+            return
+        self._blanked = True
+        from PyQt6.QtWidgets import QApplication
+
+        if QApplication.platformName() != "cocoa":
+            return
+        try:  # 截图给 Gemini 时把面板涂成纯灰：不让它读到面板上的字（见 capture.BLANK_WINDOW_IDS）
+            import objc
+
+            from showme import capture
+
+            capture.blank_window(objc.objc_object(c_void_p=int(self.winId())).window().windowNumber())
+        except Exception as e:  # noqa: BLE001
+            print(f"[panel] 截图遮住面板失败：{e}", flush=True)
+
     def lang(self) -> str:
         return self.lang_box.currentData()
 

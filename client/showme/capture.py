@@ -17,10 +17,49 @@ from showme.config import JPEG_QUALITY, MAX_SIDE
 # 只靠「清空内容再重绘」不可靠：重绘要等 Core Animation 提交、WindowServer 合成，偶尔截到上一步的框和气泡
 # （日志 06_next_screen.jpg）。直接让 WindowServer 合成时不带这些窗口，就跟重绘时机无关了。
 EXCLUDE_WINDOW_IDS: set[int] = set()
+# 截图时涂成纯色的窗口：ShowMe 面板。不能直接去掉（Gemini 会把框指到面板挡住、用户看不见的地方），
+# 也不能留着字（日志 20261115-091821/09_next：Gemini 读到面板上「任务完成」的字，叫用户点 Stop，
+# 下一次又读到自己那句「Click the Stop button」，一直绕圈）。
+BLANK_WINDOW_IDS: set[int] = set()
+BLANK_COLOR = (128, 128, 128)
 
 
 def exclude_window(window_id: int) -> None:
     EXCLUDE_WINDOW_IDS.add(int(window_id))
+
+
+def blank_window(window_id: int) -> None:
+    BLANK_WINDOW_IDS.add(int(window_id))
+
+
+def _window_rects(ids: set[int], img_w: int) -> list[tuple[int, int, int, int]]:
+    """这些窗口在截图里的位置（像素，左上角原点）：(x, y, w, h)。不在屏幕上的跳过。
+    截图一般是逻辑尺寸；screencapture 退路是 Retina 像素，按宽度比例换算。"""
+    try:
+        import Quartz as Q
+
+        k = img_w / float(Q.CGDisplayBounds(Q.CGMainDisplayID()).size.width)
+        info = Q.CGWindowListCopyWindowInfo(Q.kCGWindowListOptionOnScreenOnly, Q.kCGNullWindowID) or []
+        out = []
+        for w in info:
+            if int(w.get("kCGWindowNumber", -1)) in ids:
+                b = w["kCGWindowBounds"]
+                out.append(tuple(round(float(b[n]) * k) for n in ("X", "Y", "Width", "Height")))
+        return out
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def blank_rects(img: Image.Image, rects) -> Image.Image:
+    """把 rects 涂成纯灰色（不留任何字）。"""
+    if not rects:
+        return img
+    from PIL import ImageDraw
+
+    d = ImageDraw.Draw(img)
+    for x, y, w, h in rects:
+        d.rectangle([x, y, x + w - 1, y + h - 1], fill=BLANK_COLOR)
+    return img
 
 
 def _grab_excluding(exclude: set[int]) -> Image.Image | None:
@@ -47,7 +86,15 @@ def _grab_excluding(exclude: set[int]) -> Image.Image | None:
 
 
 def grab() -> Image.Image:
-    """截主显示器整屏（不含 ShowMe 高亮层）。排除窗口失败时用 mss，再不行改用系统的 screencapture。"""
+    """截主显示器整屏：不含 ShowMe 高亮层，ShowMe 面板涂成纯灰色。"""
+    img = _grab_raw()
+    if BLANK_WINDOW_IDS:
+        img = blank_rects(img, _window_rects(BLANK_WINDOW_IDS, img.width))
+    return img
+
+
+def _grab_raw() -> Image.Image:
+    """排除窗口失败时用 mss，再不行改用系统的 screencapture。"""
     if EXCLUDE_WINDOW_IDS:
         img = _grab_excluding(EXCLUDE_WINDOW_IDS)
         if img is not None:

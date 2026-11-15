@@ -48,3 +48,15 @@ def test_grab_falls_back_when_exclusion_fails(monkeypatch):
 
     monkeypatch.setattr(capture.mss, "MSS", FakeMSS, raising=False)
     assert capture.grab().size == (4, 2)
+
+
+def test_grab_paints_panel_gray_so_gemini_cannot_read_it(monkeypatch):
+    from showme import capture
+
+    monkeypatch.setattr(capture, "EXCLUDE_WINDOW_IDS", {42})
+    monkeypatch.setattr(capture, "BLANK_WINDOW_IDS", {7})
+    monkeypatch.setattr(capture, "_grab_excluding", lambda ex: Image.new("RGB", (100, 50), "white"))
+    monkeypatch.setattr(capture, "_window_rects", lambda ids, w: [(60, 10, 30, 20)] if ids == {7} else [])
+    img = capture.grab()
+    assert img.getpixel((70, 20)) == capture.BLANK_COLOR  # 面板那块：纯灰
+    assert img.getpixel((59, 20)) == (255, 255, 255) and img.getpixel((90, 20)) == (255, 255, 255)  # 其他地方不动
