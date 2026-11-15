@@ -2,7 +2,7 @@
 
 import httpx
 
-from showme.config import API_BASE
+from showme.config import API_BASE, API_TOKEN
 from showme.i18n import get_lang, t
 
 
@@ -16,22 +16,40 @@ class ApiError(Exception):
 _client = httpx.Client(base_url=API_BASE)
 
 
+def auth_headers(path: str) -> dict:
+    """/api/health 不需要口令；其他请求都带 X-ShowMe-Token（没设 SHOWME_TOKEN 就不带）。"""
+    if path == "/api/health" or not API_TOKEN:
+        return {}
+    return {"X-ShowMe-Token": API_TOKEN}
+
+
 def _request(method: str, path: str, timeout: float, **kw) -> httpx.Response:
     try:
-        r = _client.request(method, path, timeout=timeout, **kw)
-    except httpx.TimeoutException:
+        r = _client.request(method, path, timeout=timeout, headers=auth_headers(path), **kw)
+    except httpx.TimeoutException as e:
+        print(f"[api] {method} {path} → 超时（{timeout}s）：{e!r}", flush=True)
         raise ApiError(t("err_timeout"))
-    except httpx.HTTPError:
+    except httpx.HTTPError as e:
+        print(f"[api] {method} {path} → 连不上：{e!r}", flush=True)
         raise ApiError(t("err_connect"))
+    if r.status_code == 401:
+        print(f"[api] {method} {path} → HTTP 401（口令不对或没设 SHOWME_TOKEN）：{r.text[:200]!r}", flush=True)
+        raise ApiError(t("err_token"), 401)
     if r.status_code >= 400:
         try:
             msg = r.json()["error"]
         except Exception:  # noqa: BLE001
+            print(f"[api] {method} {path} → HTTP {r.status_code}（body 不是 JSON）：{r.text[:200]!r}", flush=True)
             raise ApiError(t("err_http", code=r.status_code), r.status_code)
         # 后端的 error 是中文：英文界面下显示通用英文提示，原文打印到终端方便调试
         print(f"[api] {method} {path} → HTTP {r.status_code}: {msg}", flush=True)
         raise ApiError(msg if get_lang() == "zh" else t("err_generic"), r.status_code)
     return r
+
+
+def agent_session() -> dict:
+    """实时语音：{signed_url, agent_id}。503 = 后端没配实时语音。"""
+    return _request("GET", "/api/agent-session", timeout=10).json()
 
 
 def health() -> dict:

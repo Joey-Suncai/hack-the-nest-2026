@@ -24,10 +24,10 @@ from pathlib import Path
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
-from showme import api, apps, capture, wording
+from showme import api, apps, capture, ocr, wording
 from showme.change import ChangeDetector, mask_rects
 from showme.config import HIGHLIGHT_PAD, LOG, MIC_MAX_S, POLL_S
-from showme.coords import box_to_rect, expand
+from showme.coords import box_to_rect, expand, same_target
 from showme.i18n import t
 from showme.narrator import Narrator
 from showme.recorder import Recorder
@@ -93,8 +93,19 @@ class Controller(QObject):
         self._typing = False
         self._speak_after_reply = False
         self._interrupted_request = False
+        self._guess: dict | None = None  # 上一次 next-step 返回的 next_guess（预测的下一步）
+        self._provisional: dict | None = None  # OCR 秒出的框，等 Gemini 核对
+        self._t_change: float | None = None  # 画面变化被检测到的时刻（算出框耗时）
+        self.step_listener = None  # 新的一步出来时回调 (instruction, kind)，kind = ocr / gemini / correction；Agent 用
         self._log_dir = None
         self._n_req = 0
+        self._n_log = 0
+        g = QApplication.primaryScreen().geometry()
+        self._screen_wh = (g.width(), g.height())  # 后台线程里记日志要用，不能在那边调 Qt
+        if LOG:
+            self._log_dir = Path(__file__).resolve().parent.parent / "logs" / time.strftime("%Y%m%d-%H%M%S")
+            self._log_dir.mkdir(parents=True, exist_ok=True)
+            print(f"[log] 每一轮对话和每一步的截图 / 请求 / 返回存到 {self._log_dir}", flush=True)
 
         panel.message_submitted.connect(self.on_user_message)
         panel.mic_toggled.connect(self.toggle_mic)
@@ -102,6 +113,7 @@ class Controller(QObject):
         panel.stop_requested.connect(self.stop)
         panel.retry_requested.connect(self.retry)
         panel.add_message("assistant", t("welcome"))
+        self._bg_free(ocr.warmup, lambda ms: print(f"[ocr] 热身完成 {ms:.0f} ms", flush=True), lambda e: None)
 
     # ================= 对话 =================
     def on_user_message(self, text: str):
@@ -117,6 +129,7 @@ class Controller(QObject):
         self._chat_busy = True
         self.panel.set_busy(True)
         self.panel.set_status(t("thinking"))
+        front = apps.frontmost_app()  # 截图前读
         try:
             with self.overlay.hidden():
                 img = capture.grab()
@@ -128,12 +141,22 @@ class Controller(QObject):
             "message": text,
             "messages": self.messages[-MAX_MESSAGES:],  # 不含本次这句
             "task": self._task_state(),
-            "frontmost_app": apps.frontmost_app(),
+            "frontmost_app": front,
         }
         self._remember("user", text)
-        print(f"[chat] → {text!r} frontmost_app={payload['frontmost_app']!r} task={'有' if payload['task'] else '无'}", flush=True)
-        self._bg(lambda: api.chat({**payload, "screenshot": capture.to_jpeg_b64(img)}),
-                 self._on_chat, self._on_chat_error)
+        print(f"[chat] → {text!r} frontmost_app={front!r} task={'有' if payload['task'] else '无'}", flush=True)
+        t0 = time.time()
+
+        def call():
+            r = api.chat({**payload, "screenshot": capture.to_jpeg_b64(img)})
+            self._log_turn("chat", img, payload, r, t0)
+            return r
+
+        def failed(e):
+            self._log_turn("chat", img, payload, {"error": _msg(e)}, t0)
+            self._on_chat_error(e)
+
+        self._bg(call, self._on_chat, failed)
 
     def _task_state(self) -> dict | None:
         if self.task is None:
@@ -248,11 +271,6 @@ class Controller(QObject):
         self.history, self.expect, self.current, self.last_instruction = [], None, None, None
         self.guide = outline or None
         self._n_req = 0
-        self._log_dir = None
-        if LOG:
-            self._log_dir = Path(__file__).resolve().parent.parent / "logs" / time.strftime("%Y%m%d-%H%M%S")
-            self._log_dir.mkdir(parents=True, exist_ok=True)
-            print(f"[log] 每一步的截图和后端返回存到 {self._log_dir}", flush=True)
         self.panel.set_running(True)
         self._update_steps()
         if not self.guide:
@@ -317,21 +335,23 @@ class Controller(QObject):
         self.pool.start(_Job(fn, sig))
 
     # ================= next-step =================
-    def _request(self, user_note: str | None = None):
+    def _request(self, user_note: str | None = None, img=None, front: str | None = None):
+        """img / front：画面变化时已经截好的图（OCR 秒出框用的同一张），不用再截一次。"""
         if self.task is None:
             return
         self.state = REQUESTING
         self.poll.stop()
         self.panel.set_status(t("looking"))
-        try:
-            with self.overlay.hidden():
-                img = capture.grab()
-        except Exception as e:  # noqa: BLE001
-            self._on_error(api.ApiError(t("capture_failed", e=e)))
-            return
-        self._img = img
+        if img is None:
+            front = apps.frontmost_app()  # 截图前读
+            try:
+                with self.overlay.hidden():
+                    img = capture.grab()
+            except Exception as e:  # noqa: BLE001
+                self._on_error(api.ApiError(t("capture_failed", e=e)))
+                return
+        self._req_img = img
         self._n_req += 1
-        self._t_req = time.time()
         payload = {
             "app": self.task["app"],
             "goal": self.task["goal"],
@@ -339,26 +359,38 @@ class Controller(QObject):
             "history": self.history[-10:],
             "expect": self.expect,
             "guide": self.guide,
-            "user_note": user_note,
-            "frontmost_app": apps.frontmost_app(),
+            "frontmost_app": front,
         }
+        if user_note:  # 只有 /api/chat 返回 advance 时才带
+            payload["user_note"] = user_note
+        t0 = time.time()
 
         def call():
-            return api.next_step({**payload, "screenshot": capture.to_jpeg_b64(img)})
+            r = api.next_step({**payload, "screenshot": capture.to_jpeg_b64(img)})
+            self._log_turn("next", img, payload, r, t0)
+            return r
 
-        self._bg(call, self._on_result, self._on_error)
+        def failed(e):
+            self._log_turn("next", img, payload, {"error": _msg(e)}, t0)
+            self._on_error(e)
 
-    def _log(self, r: dict, rect):
-        """SHOWME_LOG=1：存发给后端的截图 + 返回 + 换算后的框，方便联调复盘。"""
+        self._bg(call, self._on_result, failed)
+
+    def _log_turn(self, kind: str, img, payload: dict, r: dict, t0: float):
+        """SHOWME_LOG=1：存每一次请求的截图 + 请求（不含截图）+ 返回 + 耗时，方便联调复盘。后台线程里调用。"""
         if not self._log_dir:
             return
         try:
-            k = f"{self._n_req:02d}"
-            self._img.convert("RGB").save(self._log_dir / f"{k}_screen.jpg", quality=80)
-            rec = {"request": self._n_req, "seconds": round(time.time() - self._t_req, 2),
-                   "history": self.history[-10:], "response": r, "rect_logical_xywh": rect}
-            (self._log_dir / f"{k}_result.json").write_text(json.dumps(rec, ensure_ascii=False, indent=2))
-            print(f"[log] #{k} {rec['seconds']}s {r.get('status')} box={r.get('box')} rect={rect} | {r.get('instruction')}", flush=True)
+            self._n_log += 1
+            k = f"{self._n_log:02d}_{kind}"
+            img.convert("RGB").save(self._log_dir / f"{k}_screen.jpg", quality=80)
+            rec = {"kind": kind, "seconds": round(time.time() - t0, 2), "request": payload, "response": r}
+            if kind == "next" and r.get("box"):
+                rec["rect_logical_xywh"] = expand(box_to_rect(r["box"], *self._screen_wh), HIGHLIGHT_PAD)
+            (self._log_dir / f"{k}.json").write_text(json.dumps(rec, ensure_ascii=False, indent=2))
+            brief = r.get("error") or (f"{r.get('action')} | {r.get('reply')}" if kind == "chat"
+                                       else f"{r.get('status')} box={r.get('box')} | {r.get('instruction')}")
+            print(f"[log] {k} {rec['seconds']}s {brief}", flush=True)
         except Exception as e:  # noqa: BLE001  记录失败不影响主流程
             print(f"[log] 记录失败：{e}")
 
@@ -367,26 +399,47 @@ class Controller(QObject):
         self.narrator.say(text, interrupt=not self._speak_after_reply)
         self._speak_after_reply = False
 
+    def _show_step(self, box: list[int], text: str):
+        rect = expand(box_to_rect(box, *self._screen_wh), HIGHLIGHT_PAD)
+        self.overlay.show_target(rect, text)
+        self.last_instruction = text
+
+    def _speed_log(self, how: str):
+        if self._t_change is not None:
+            print(f"[speed] 画面变化 → 出框 {(time.perf_counter() - self._t_change) * 1000:.0f} ms（{how}）", flush=True)
+
     def _on_result(self, r: dict):
         if self.history and r.get("previous_ok") is False:
             self.history[-1]["ok"] = False
         status, text = r.get("status"), r.get("instruction") or ""
         self.panel.set_status("")
+        prov, self._provisional = self._provisional, None
+        self._guess = r.get("next_guess") if status == "next" else None
         if status == "next" and r.get("box"):
-            screen = QApplication.primaryScreen().geometry()
-            rect = expand(box_to_rect(r["box"], screen.width(), screen.height()), HIGHLIGHT_PAD)
-            self._log(r, rect)
-            self.overlay.show_target(rect, text)
             self.current = r
-            self.last_instruction = text
             self.expect = r.get("expect")
-            self.panel.add_step(len(self.history) + 1, text)
+            if prov and same_target(prov["box"], r["box"]):
+                # OCR 秒出的框是对的：框不动，只补上 Gemini 的 expect 等信息
+                print(f"[speed] Gemini 核对：和 OCR 框一致（Gemini 用了 {(time.perf_counter() - self._t_change) * 1000:.0f} ms）", flush=True)
+                self._wait(base_img=self._req_img)  # 用户可能在等 Gemini 时已经点了：用那张截图当基准帧
+                return
+            self._show_step(r["box"], text)
             self.panel.allow_retry(True)
             self._update_steps()
-            self._say_step(text)
-            self._wait()
+            if prov:
+                print(f"[speed] Gemini 更正：OCR 框 {prov['box']} → Gemini 框 {r['box']}", flush=True)
+                self.panel.add_message("step", t("step_fixed", n=len(self.history) + 1, text=text))
+                self.narrator.say(text, interrupt=True)
+                self._notify(text, "correction")
+                self._wait(base_img=self._req_img)
+            else:
+                self._speed_log("等 Gemini")
+                self.panel.add_step(len(self.history) + 1, text)
+                self._say_step(text)
+                self._notify(text, "gemini")
+                self._wait()
         elif status == "done":
-            self._log(r, None)
+            self.overlay.clear()
             outro = wording.outro(self.task["app"], self.task["goal"], len(self.history), self.lang, text)
             self.panel.add_message("assistant", outro)
             self._remember("assistant", outro)
@@ -395,8 +448,8 @@ class Controller(QObject):
             self._speak_after_reply = False
             self._end_task(t("done"))
         else:  # unsure：比如要点的东西被挡住了 / 窗口没打开。画面一变就自动再问，也可以按「重试」
-            self._log(r, None)
             self.overlay.clear()
+            self._notify(text or t("unsure"), "gemini")
             self.current, self.last_instruction = None, None
             msg = text or t("unsure")
             self.panel.add_message("assistant", msg)
@@ -407,19 +460,26 @@ class Controller(QObject):
             self._wait()
 
     def _on_error(self, e):
-        if self._log_dir:
-            self._log({"error": _msg(e)}, None)
         self.poll.stop()
         self.state = PAUSED
         self.panel.set_status("")
         self.panel.set_error(_msg(e))
 
     # ================= 画面变化检测 =================
-    def _wait(self):
+    def _wait(self, base_img=None):
+        """base_img：用这张截图当基准帧（OCR 秒出框后，用户可能在等 Gemini 时就已经点了）。"""
         self.state = WAITING
-        self._base_raw = None
+        self._base_raw = capture.to_small_gray(base_img) if base_img is not None else None
         self._masks: list[tuple[int, int, int, int]] = []
+        self._t_change = None
         self.poll.start()
+
+    def _notify(self, text: str, kind: str):
+        if self.step_listener:
+            try:
+                self.step_listener(text, kind)
+            except Exception as e:  # noqa: BLE001
+                print(f"[agent] step_listener 出错：{e}", flush=True)
 
     def _masked(self, small):
         screen = QApplication.primaryScreen().geometry()
@@ -452,9 +512,44 @@ class Controller(QObject):
         if grew:  # 遮罩变大了：基准帧用同样的遮罩重算
             self.detector.reset(self._masked(self._base_raw))
         if self.detector.feed(self._masked(raw)):
-            if self.last_instruction:
-                self.history.append({"instruction": self.last_instruction, "ok": True})
-            self._request()
+            self._on_screen_changed()
+
+    def _on_screen_changed(self):
+        self._t_change = time.perf_counter()
+        if self.last_instruction:
+            self.history.append({"instruction": self.last_instruction, "ok": True})
+        guess = self._guess if isinstance(self._guess, dict) else ({"label": self._guess} if isinstance(self._guess, str) else None)
+        self._guess = None
+        label = (guess or {}).get("label")
+        front = apps.frontmost_app()
+        try:
+            with self.overlay.hidden():
+                img = capture.grab()
+        except Exception as e:  # noqa: BLE001
+            self._on_error(api.ApiError(t("capture_failed", e=e)))
+            return
+        self._request(img=img, front=front)  # Gemini 照常核对
+        if not label:
+            return
+        instr = guess.get("instruction") or t("click_label", label=label)
+        token = self._token
+
+        def found(res):
+            box, ms = res
+            # Gemini 已经先回来了 / 任务变了：OCR 结果作废
+            if token != self._token or self.state != REQUESTING or box is None:
+                if box is None:
+                    print(f"[speed] OCR 没找到 {label!r}（{ms:.0f} ms），等 Gemini", flush=True)
+                return
+            self._provisional = {"box": box, "instruction": instr}
+            self._show_step(box, instr)
+            self._speed_log(f"OCR 秒出，识别 {ms:.0f} ms")
+            self.panel.add_step(len(self.history) + 1, instr)
+            self._update_steps()
+            self._say_step(instr)
+            self._notify(instr, "ocr")
+
+        self._bg_free(lambda: ocr.locate(img, label), found, lambda e: print(f"[ocr] {_msg(e)}", flush=True))
 
     def _fetch_guide(self):
         """后端用官方文档生成步骤大纲。没有这个接口 / 失败都没关系。"""

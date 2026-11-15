@@ -53,3 +53,35 @@ def test_speak_204_returns_none(monkeypatch):
 def test_guide_failure_returns_none(monkeypatch):
     _use(monkeypatch, lambda r: httpx.Response(404, json={"detail": "Not Found"}))
     assert api.guide("VS Code", "Clone a repo", "en") is None
+
+
+def test_token_header_sent_except_health(monkeypatch):
+    seen = {}
+
+    def handler(r):
+        seen[r.url.path] = r.headers.get("X-ShowMe-Token")
+        return httpx.Response(200, json={"status": "ok", "reply": "", "action": "clarify"})
+
+    monkeypatch.setattr(api, "API_TOKEN", "test-token")
+    _use(monkeypatch, handler)
+    api.health()
+    api.chat({"message": "hi"})
+    assert seen == {"/api/health": None, "/api/chat": "test-token"}
+
+
+def test_no_token_no_header(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(api, "API_TOKEN", None)
+    _use(monkeypatch, lambda r: (seen.update(h=r.headers.get("X-ShowMe-Token")), httpx.Response(200, json={}))[1])
+    api.chat({"message": "hi"})
+    assert seen == {"h": None}
+
+
+def test_401_shows_token_message(monkeypatch):
+    from showme import i18n
+
+    i18n.set_lang("en")
+    monkeypatch.setattr(api, "API_TOKEN", "wrong")
+    _use(monkeypatch, lambda r: httpx.Response(401, json={"error": "口令不对"}))
+    with pytest.raises(api.ApiError, match="Wrong access token — check SHOWME_TOKEN"):
+        api.next_step({})

@@ -11,6 +11,8 @@ TEXT = {
         "transcribing": "Turning your voice into text…",
         "thinking": "Thinking…",
         "step_msg": "Step {n}: {text}",
+        "step_fixed": "Step {n} (updated): {text}",
+        "click_label": "Click “{label}”",
         "welcome": "Hi! Open the app you want to learn, then tell me what you want to do. You can ask me questions anytime.",
         "voice_unavailable": "Voice input isn't set up — please type instead.",
         "not_heard": "I didn't catch that — please say it again.",
@@ -34,6 +36,7 @@ TEXT = {
         "err_connect": "Can't reach the server. Run make backend first",
         "err_http": "Server error (HTTP {code})",
         "err_generic": "Something went wrong — please try again.",
+        "err_token": "Wrong access token — check SHOWME_TOKEN",
         "current_app": "the current app",
     },
     "zh": {
@@ -44,6 +47,8 @@ TEXT = {
         "transcribing": "正在把语音转成文字…",
         "thinking": "正在想…",
         "step_msg": "第 {n} 步：{text}",
+        "step_fixed": "第 {n} 步（更正）：{text}",
+        "click_label": "点击「{label}」",
         "welcome": "你好！先打开你想学的软件，再告诉我你想做什么。中途随时可以问我。",
         "voice_unavailable": "语音输入没有配置，请直接打字。",
         "not_heard": "没听清，再说一次吧。",
@@ -67,6 +72,7 @@ TEXT = {
         "err_connect": "连不上后端，请先运行 make backend",
         "err_http": "后端出错了（HTTP {code}）",
         "err_generic": "出错了，请再试一次",
+        "err_token": "口令不对，请检查 SHOWME_TOKEN",
         "current_app": "当前软件",
     },
 }

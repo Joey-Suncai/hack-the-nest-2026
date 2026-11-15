@@ -6,6 +6,14 @@ import os
 DEMO_APP = "VS Code"
 DEMO_GOAL = "Clone the GitHub repo https://github.com/octocat/Hello-World"
 
+# ---- 实时语音的麦克风过滤（voice_filter.py）----
+VAD_THRESHOLD = 0.5  # Silero 人声概率超过多少算「有人在说话」
+VOICE_THRESHOLD = 0.5  # 声纹余弦相似度超过多少算「是本人」（实测后调整）
+VOICE_CONFIRM_S = 0.5  # 累计多少秒人声后做一次声纹判断（这段时间先压低 ShowMe 的音量）
+VOICE_END_S = 0.6  # 连续多少秒没人声算这段话结束
+DUCK_VOLUME = 0.3  # 检测到人声时 ShowMe 播放音量压到多少
+PTT_KEY = "space"  # 「按住说话」用的键
+
 # ---- 语音输入 ----
 MIC_RATE = 16000  # /api/transcribe 要 16 kHz 单声道 WAV
 MIC_MAX_S = 30  # 最长录多久，到点自动结束
@@ -15,16 +23,18 @@ LOG = os.getenv("SHOWME_LOG") == "1"
 
 # ---- 后端 ----
 API_BASE = os.getenv("SHOWME_API", "http://localhost:8000")
+# 后端口令：每个请求（/api/health 除外）带请求头 X-ShowMe-Token。口令只从环境变量读，绝不写进代码
+API_TOKEN = os.getenv("SHOWME_TOKEN") or None
 
 # ---- 截图 ----
 MAX_SIDE = 1280  # 发给后端的截图长边
 JPEG_QUALITY = 70
 
 # ---- 画面变化检测 ----
-POLL_S = 0.4  # 等用户操作时，多久截一次图
+POLL_S = 0.15  # 等用户操作时，多久截一次图（0.15 s：点完按钮到出框要在 1 秒内）
 PIXEL_DELTA = 0.08  # 64x64 灰度图里，一个像素亮度变化超过这个值才算「这个像素变了」
 CHANGE_THRESHOLD = 0.004  # 变了的像素超过这个比例（约 16 / 4096）算「画面变了」；漏检就调小，误判就调大
-STABLE_FRAMES = 2  # 变化后连续几帧不动，才算用户这一步做完了
+STABLE_FRAMES = 1  # 变化后连续几帧不动，才算用户这一步做完了
 
 # ---- 高亮样式（光圈）----
 HIGHLIGHT_PAD = 12  # 框比目标元素四周大多少（逻辑像素）
