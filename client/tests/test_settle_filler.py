@@ -174,7 +174,7 @@ def _signals(monkeypatch, kind, inputs_ok=True, fired=True):
     c._down = None
     c.task, c._token, c.history = {"goal": "x"}, 0, []
     for name in ("_on_click", "_on_mouse_down", "_on_mouse_up", "_click_completes", "_on_key", "_on_poll",
-                 "_screen_only_backup", "_cancel_recheck", "_schedule_miss_recheck", "_miss_recheck_tick"):
+                 "_screen_only_backup", "_cancel_recheck", "_schedule_miss_recheck", "_miss_recheck_tick", "_user_acted"):
         setattr(c, name, types.MethodType(getattr(Controller, name), c))
     return c, done
 
@@ -500,3 +500,27 @@ def test_miss_recheck_cancelled_by_next_click(monkeypatch):
     c._on_mouse_up(120, 210)
     timers[0][1]()
     assert done == ["click"]  # 复查作废，只算这一次点中
+
+
+def test_user_acting_while_gemini_thinks_rechecks_and_reasks(monkeypatch, capsys):
+    # 日志里的真实情况：Gemini 4.4 s 才回来，用户已经自己选好了日期；旧结果的框画在已经关掉的弹窗上
+    c, timers, requests, log = _recheck_ctl(monkeypatch, [0.6])
+    c._req_img, c._req_expect, c._recheck = "req", "date picker opens", None
+    c._user_acted = types.MethodType(Controller._user_acted, c)
+    c._user_acted()  # REQUESTING 时点了鼠标
+    (ms, fn), = timers
+    assert abs(ms - ctl.RECHECK_AFTER_S * 1000) < 1 and "等 Gemini 时用户操作了" in capsys.readouterr().out
+    c.state = ctl.WAITING  # 按旧画面算的那一步回来、已经显示了
+    fn()
+    assert log == ["clear", "hush"]  # 撤掉旧框
+    assert requests == [(0.6, "Zoom", None, "date picker opens")]  # 用最新画面重新问
+
+
+def test_user_acting_when_not_waiting_for_gemini_cancels_recheck(monkeypatch):
+    c, timers, requests, _ = _recheck_ctl(monkeypatch, [0.6])
+    c._schedule_recheck("req", None, "old")
+    c.state = ctl.WAITING
+    c._user_acted = types.MethodType(Controller._user_acted, c)
+    c._user_acted()  # 框已经出来了，用户在做这一步：交给点击逻辑
+    timers[0][1]()
+    assert requests == [] and len(timers) == 1

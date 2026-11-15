@@ -441,6 +441,7 @@ class Controller(QObject):
                 self._on_error(api.ApiError(t("capture_failed", e=e)))
                 return
         self._req_img = img
+        self._req_expect = self.expect  # 复查重问时用发这次请求时的 expect
         self._n_req += 1
         payload = {
             "app": self.task["app"],
@@ -833,7 +834,7 @@ class Controller(QObject):
     def _on_mouse_down(self, x: float, y: float):
         """全局左键按下（用户点的是别的 App）：记下位置和当时的框，框马上藏起来。
         OCR 秒出的框在 Gemini 核对回来之前也能点。"""
-        self._cancel_recheck()  # 用户又点了：之后的画面变化是这次点击造成的
+        self._user_acted()  # 等 Gemini 时点了：结果可能已经过时 → 复查；否则之后的变化是这次点击造成的，不复查
         self._down = None
         prov = self.state == REQUESTING and self._provisional is not None
         if (self.state != WAITING and not prov) or self._step_done or self.overlay._rect is None:
@@ -898,7 +899,7 @@ class Controller(QObject):
     def _on_key(self, is_return: bool, is_tab: bool = False):
         """全局按键：只看是不是回车 / Tab，不记内容。打字步骤：回车 = enter，打过字再按 Tab = typing，
         其它键只计数；快捷键步骤有按键就算。"""
-        self._cancel_recheck()  # 用户在打字：之后的画面变化是打字造成的
+        self._user_acted()  # 同上：等 Gemini 时打字也会让结果过时
         prov = self.state == REQUESTING and self._provisional is not None and self.overlay._rect is not None
         if (self.state != WAITING and not prov) or self._step_done:
             return
@@ -983,6 +984,23 @@ class Controller(QObject):
     def _cancel_recheck(self):
         """用户又点了 / 按了键 / 说了话：之后画面的变化是新的操作造成的，不复查。"""
         self._recheck = None
+
+    def _user_acted(self):
+        """用户点了鼠标 / 按了键。
+        - 正在等 Gemini（REQUESTING）：用户已经自己往下做了（日志：Gemini 4.4 s 才回来，用户早就选好了日期，
+          框却画在已经关掉的日历弹窗上）→ 从这次操作起 RECHECK_AFTER_S 秒后，用发给 Gemini 的那张截图比一次，
+          变了就丢掉 / 撤掉旧结果、用最新画面重新问
+        - 其它时候：之后的画面变化是这次操作造成的 → 取消复查（这一步的点击 / 打字逻辑自己会处理）"""
+        if self.state != REQUESTING or self.task is None or getattr(self, "_req_img", None) is None:
+            self._cancel_recheck()
+            return
+        prev = getattr(self, "_recheck", None)
+        if not (prev and prev.get("action")):
+            print(f"[recheck] 等 Gemini 时用户操作了：{RECHECK_AFTER_S:.1f} s 后再看一次画面", flush=True)
+        rc = {"img": self._req_img, "token": self._token, "hist": len(self.history), "confirmed": None,
+              "expect": getattr(self, "_req_expect", None), "action": True}
+        self._recheck = rc  # 连续操作：只有最后一次的计时有效
+        QTimer.singleShot(int(RECHECK_AFTER_S * 1000), lambda: self._recheck_tick(rc))
 
     def _schedule_miss_recheck(self):
         """点在框外（框画回来了）：松开后 RECHECK_AFTER_S 秒和点之前的画面比。变了 = 用户确实做了点什么
@@ -1241,6 +1259,7 @@ class Controller(QObject):
         with self.overlay.hidden():
             img = capture.grab()
         self._req_img = img
+        self._req_expect = self.expect  # 复查重问时用发这次请求时的 expect
         self._n_req += 1
         payload = {"app": self.task["app"], "goal": self.task["goal"], "lang": self.lang, "history": self.history[-10:],
                    "expect": self.expect, "guide": self.guide, "frontmost_app": front}
