@@ -171,7 +171,9 @@ def _signals(monkeypatch, kind, inputs_ok=True, fired=True):
                               _masked=lambda raw: raw, _last_raw=None,
                               detector=types.SimpleNamespace(feed=lambda f: fired, reset=lambda f: None))
     c._step_completed = lambda reason, detail=None: done.append(reason)
-    for name in ("_on_click", "_on_key", "_on_poll", "_screen_only_backup"):
+    c._down = None
+    for name in ("_on_click", "_on_mouse_down", "_on_mouse_up", "_click_completes", "_on_key", "_on_poll",
+                 "_screen_only_backup", "_cancel_recheck"):
         setattr(c, name, types.MethodType(getattr(Controller, name), c))
     return c, done
 
@@ -192,14 +194,74 @@ def test_key_step_any_key(monkeypatch):
     assert done == ["key"]
 
 
-def test_click_step_ignores_screen_change_and_near_click_counts(monkeypatch):
+def test_click_step_ignores_screen_change_and_clicks_outside_box(monkeypatch):
     c, done = _signals(monkeypatch, "click")
     c._on_poll()  # 加载 / 悬停：画面变了但没点
     assert done == [] and c._rebase
     c._on_click(400, 600)  # 点得很远
     assert done == []
-    c._on_click(75, 205)  # 框外 25 点（放宽 8 点之外）：框画偏了，直接算
-    assert done == ["click_near"]
+    c._on_click(75, 205)  # 框外 25 点（放宽 8 点之外）：不算（框来自真实控件，已经准了）
+    assert done == []
+
+
+class _FakeOverlay:
+    """记录 suspend / resume；suspend 后 _rect 变 None（和真的一样），resume 画回来。"""
+    def __init__(self):
+        self._rect, self.calls = _Rect(), []
+
+    def suspend(self):
+        self.calls.append("suspend")
+        self._saved, self._rect = self._rect, None
+        return True
+
+    def resume(self):
+        self.calls.append("resume")
+        self._rect = self._saved
+
+
+def _mouse(monkeypatch, kind="click"):
+    c, done = _signals(monkeypatch, kind, fired=False)
+    c.overlay = _FakeOverlay()
+    c._down = None
+    for name in ("_on_mouse_down", "_on_mouse_up", "_click_completes"):
+        setattr(c, name, types.MethodType(getattr(Controller, name), c))
+    return c, done
+
+
+def test_mouse_down_hides_box_and_up_inside_completes(monkeypatch):
+    c, done = _mouse(monkeypatch)
+    c._on_mouse_down(120, 210)
+    assert c.overlay.calls == ["suspend"] and done == []  # 按下：框马上藏起来，还不算完成
+    c._on_mouse_up(121, 211)
+    assert done == ["click"] and c.overlay.calls == ["suspend"]  # 松开在框里：完成，框不再画回来
+
+
+def test_drag_out_of_box_does_not_complete_and_box_comes_back(monkeypatch):
+    c, done = _mouse(monkeypatch)
+    c._on_mouse_down(120, 210)  # 框里按下
+    c._on_mouse_up(400, 600)  # 拖到框外松开（取消 / 拖拽）
+    assert done == [] and c.overlay.calls == ["suspend", "resume"] and c.overlay._rect is not None
+
+
+def test_press_outside_then_release_inside_does_not_complete(monkeypatch):
+    c, done = _mouse(monkeypatch)
+    c._on_mouse_down(400, 600)
+    c._on_mouse_up(120, 210)
+    assert done == [] and c.overlay.calls == ["suspend", "resume"]
+
+
+def test_mouse_up_without_down_is_ignored(monkeypatch):
+    c, done = _mouse(monkeypatch)
+    c._on_mouse_up(120, 210)  # 按下时还没有框（比如在等 Gemini）
+    assert done == [] and c.overlay.calls == []
+
+
+def test_state_change_between_down_and_up_does_not_complete(monkeypatch):
+    c, done = _mouse(monkeypatch)
+    c._on_mouse_down(120, 210)
+    c.state = ctl.PAUSED  # 按住的时候用户按了停止 / 开始说话
+    c._on_mouse_up(120, 210)
+    assert done == [] and c.overlay.calls == ["suspend", "resume"]
 
 
 def test_click_in_box_completes(monkeypatch):
@@ -239,7 +301,7 @@ def test_settle_waits_for_change_before_stable(monkeypatch, capsys):
 def test_settle_no_change_gives_up_at_max(monkeypatch, capsys):
     c = _settler(monkeypatch, [0.0] * 400)
     c._last_raw = np.zeros((64, 64), np.float32)
-    c._step_completed("click")
+    c._step_completed("click_near")  # 点在框里的（click）不等慢窗口：见 test_confirmed_click_waits_only_short
     c._settle_tick()
     assert c.fired == []  # 一直没变：不会 0.3 s 就截
     c._settle["t0"] -= ctl.SETTLE_MAX_S
@@ -255,7 +317,7 @@ class FakeClock:
     def __call__(self): return self.t
 
 
-def _sim(monkeypatch, frame_at, reason="click", max_s=10.0):
+def _sim(monkeypatch, frame_at, reason="click_near", max_s=10.0):
     """用假时钟按 SETTLE_POLL_S 一帧帧跑：frame_at(t) = t 秒时截到的画面（灰度值）。返回截正式图的时刻（秒）。"""
     clock = FakeClock()
     monkeypatch.setattr(ctl.time, "monotonic", clock)
@@ -322,3 +384,66 @@ def test_click_elsewhere_during_ocr_box_keeps_waiting_for_gemini(monkeypatch):
     c._token = 5
     c._on_click(600, 900)
     assert done == [] and c._token == 5 and c._provisional is not None
+
+
+# ---------------- 复查：截早了就用最新画面重新问 ----------------
+def _recheck_ctl(monkeypatch, frames):
+    """frames：复查时截到的缩略图灰度值；请求那张固定是 0。"""
+    shots = iter(frames)
+    monkeypatch.setattr(capture, "grab", lambda: next(shots))
+    monkeypatch.setattr(capture, "to_small_gray", lambda img: np.full((64, 64), 0.0 if img == "req" else img, np.float32))
+    monkeypatch.setattr(ctl.apps, "frontmost_app", lambda: "Zoom")
+    timers = []
+    monkeypatch.setattr(ctl.QTimer, "singleShot", staticmethod(lambda ms, fn: timers.append((ms, fn))))
+    requests, log = [], []
+    c = types.SimpleNamespace(task={"app": "Zoom", "goal": "x"}, state=ctl.REQUESTING, _token=3, history=[1, 2],
+                              _step_done=False, _provisional={"box": [1, 2, 3, 4]}, expect="new", _confirmed=None,
+                              _done_mono=ctl.time.monotonic(), _grow_masks=lambda: False, _masked=lambda raw: raw,
+                              overlay=types.SimpleNamespace(clear=lambda: log.append("clear")),
+                              narrator=types.SimpleNamespace(stop=lambda: log.append("hush")))
+    c._request = lambda img=None, front=None: requests.append((img, front, c._confirmed, c.expect))
+    for name in ("_schedule_recheck", "_cancel_recheck", "_recheck_tick"):
+        setattr(c, name, types.MethodType(getattr(Controller, name), c))
+    return c, timers, requests, log
+
+
+def test_recheck_fires_about_1_5s_after_the_action(monkeypatch):
+    c, timers, requests, _ = _recheck_ctl(monkeypatch, [])
+    c._schedule_recheck("req", {"kind": "click", "target": "Save"}, "old")
+    (ms, _fn), = timers
+    assert abs(ms - ctl.RECHECK_AFTER_S * 1000) < 100
+
+
+def test_recheck_no_change_keeps_result(monkeypatch, capsys):
+    c, timers, requests, _ = _recheck_ctl(monkeypatch, [0.0])
+    c._schedule_recheck("req", None, "old")
+    timers[0][1]()
+    assert requests == [] and c._token == 3 and "画面没变" in capsys.readouterr().out
+
+
+def test_recheck_change_while_requesting_asks_again_with_latest_screen(monkeypatch):
+    c, timers, requests, log = _recheck_ctl(monkeypatch, [0.6])
+    conf = {"kind": "click", "target": "Save"}
+    c._schedule_recheck("req", conf, "old")
+    timers[0][1]()
+    assert c._token == 4 and c._provisional is None and log == []  # 旧结果作废；还没显示，不用撤
+    assert requests == [(0.6, "Zoom", conf, "old")]  # 最新画面、照样带 confirmed、用请求时的 expect
+
+
+def test_recheck_change_after_result_shown_withdraws_it(monkeypatch):
+    c, timers, requests, log = _recheck_ctl(monkeypatch, [0.6])
+    c._schedule_recheck("req", None, "old")
+    c.state = ctl.WAITING  # 按旧画面算的下一步已经显示了
+    timers[0][1]()
+    assert log == ["clear", "hush"] and len(requests) == 1
+
+
+def test_recheck_cancelled_by_new_user_action_or_next_step(monkeypatch):
+    c, timers, requests, _ = _recheck_ctl(monkeypatch, [0.6, 0.6])
+    c._schedule_recheck("req", None, "old")
+    c._cancel_recheck()  # 用户又点 / 按键了
+    timers[0][1]()
+    c._schedule_recheck("req", None, "old")
+    c.history.append(3)  # 已经进到下一步
+    timers[1][1]()
+    assert requests == []

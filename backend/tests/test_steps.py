@@ -164,7 +164,7 @@ def test_prompt_without_elements_unchanged():
               history=[HistoryItem(instruction="点图表", ok=True)], expect="出现菜单", guide=["插入 > 图表"])
     base = steps.gemini.load_prompt(
         "next_step", app="Numbers", goal="做柱状图", lang_name="English", history="1. 点图表（完成）",
-        expect="出现菜单", guide="- 插入 > 图表", user_note="（无）", frontmost_app="（未知）")
+        expect="出现菜单", guide="- 插入 > 图表", user_note="（无）", frontmost_app="（未知）", context="")
     assert steps.build_prompt(NextStepIn(**kw)) == base
     assert steps.build_prompt(NextStepIn(**kw, elements=[])) == base
     p = steps.build_prompt(NextStepIn(**kw, elements=ELEMENTS))
@@ -200,3 +200,112 @@ def test_endpoint_mock_with_elements(client, monkeypatch):
     assert j["element_id"] == 12 and j["box"] == [40, 950, 62, 966] and j["target_label"] == "New Tab"
     j = client.post("/api/next-step", json={**body, "elements": None}).json()
     assert j["element_id"] is None and j["box"] == [450, 450, 550, 550]
+
+
+# ---------- 推理：situation / reasoning / plan / app，confirmed / app_switched_from / deep ----------
+def test_request_parses_new_fields():
+    body = NextStepIn(app="Zoom", goal="g", screenshot=TINY_PNG_B64, deep=True, app_switched_from="Zoom",
+                      frontmost_app="Google Chrome",
+                      confirmed={"kind": "click", "target": "开始时间", "detail": "focused AXComboBox '开始时间'"})
+    assert body.deep is True and body.app_switched_from == "Zoom"
+    assert body.confirmed.kind == "click" and body.confirmed.target == "开始时间"
+    plain = NextStepIn(app="a", goal="g", screenshot=TINY_PNG_B64)
+    assert plain.deep is False and plain.confirmed is None and plain.app_switched_from is None
+    minimal = NextStepIn(app="a", goal="g", screenshot=TINY_PNG_B64, confirmed={"kind": "enter"})
+    assert minimal.confirmed.target is None and minimal.confirmed.detail is None
+
+
+def test_bad_confirmed_is_dropped_not_rejected(client, monkeypatch):
+    assert NextStepIn(app="a", goal="g", screenshot=TINY_PNG_B64, confirmed={"kind": "drag"}).confirmed is None
+    assert NextStepIn(app="a", goal="g", screenshot=TINY_PNG_B64, confirmed="yes").confirmed is None
+    monkeypatch.setattr(steps.gemini, "MOCK", True)
+    r = client.post("/api/next-step", json={"app": "a", "goal": "g", "screenshot": TINY_PNG_B64,
+                                            "confirmed": {"kind": "wave"}})
+    assert r.status_code == 200
+
+
+def test_finalize_sanitizes_reasoning_fields():
+    out = finalize(_out(situation="  Chrome opened   sign-in.  ", reasoning=" ", app=" Google Chrome ",
+                        plan=[" Click your account ", "", "  ", "x" * 200] + [f"step {i}" for i in range(10)]))
+    assert out.situation == "Chrome opened sign-in." and out.reasoning is None and out.app == "Google Chrome"
+    assert out.plan[0] == "Click your account" and out.plan[1] == "x" * 80
+    assert len(out.plan) == 8 and all(p.strip() and len(p) <= 80 for p in out.plan)
+    assert finalize(_out(plan=["", " "])).plan is None
+    assert finalize(_out(app="")).app is None
+
+
+def test_finalize_drops_plan_when_done():
+    out = finalize(_out(status="done", box=None, plan=["a"], situation="all set"))
+    assert out.plan is None and out.situation == "all set"
+
+
+def test_new_fields_absent_by_default():
+    out = finalize(_out())
+    assert out.situation is None and out.reasoning is None and out.plan is None and out.app is None
+
+
+def _hist(ok=True):
+    return [HistoryItem(instruction="x", ok=ok)]
+
+
+def test_thinking_choice(monkeypatch):
+    monkeypatch.setattr(steps, "THINKING", "low")
+    monkeypatch.setattr(steps, "DEEP_THINKING", "medium")
+    base = dict(app="a", goal="g", screenshot=TINY_PNG_B64)
+    assert steps.choose_thinking(NextStepIn(**base, history=_hist())) == ("low", "routine")
+    assert steps.choose_thinking(NextStepIn(**base, history=_hist(None))) == ("low", "routine")
+    assert steps.choose_thinking(NextStepIn(**base, history=_hist(),
+                                            confirmed={"kind": "click"}))[0] == "low"  # 确认本身不加思考
+    assert steps.choose_thinking(NextStepIn(**base, history=_hist(), deep=True)) == ("medium", "deep requested")
+    assert steps.choose_thinking(NextStepIn(**base)) == ("medium", "first step")
+    assert steps.choose_thinking(NextStepIn(**base, history=_hist(), user_note="点错了")) == ("medium", "user note")
+    assert steps.choose_thinking(NextStepIn(**base, history=_hist(), user_note="  "))[0] == "low"
+    assert steps.choose_thinking(NextStepIn(**base, history=_hist(), app_switched_from="Zoom")) == \
+        ("medium", "app switched")
+    assert steps.choose_thinking(NextStepIn(**base, history=_hist(False))) == ("medium", "previous step failed")
+
+
+def test_next_step_passes_thinking(monkeypatch, capsys):
+    seen = []
+
+    def fake(prompt, schema, files=None, thinking=None):
+        seen.append(thinking)
+        return _out()
+
+    monkeypatch.setattr(steps.gemini, "generate_json", fake)
+    monkeypatch.setattr(steps, "THINKING", "low")
+    monkeypatch.setattr(steps, "DEEP_THINKING", "medium")
+    monkeypatch.setattr(steps, "REFINE_ON_RETRY", False)
+    steps.next_step(NextStepIn(app="a", goal="g", screenshot=TINY_PNG_B64, history=_hist(),
+                               app_switched_from="Zoom", frontmost_app="Google Chrome"))
+    steps.next_step(NextStepIn(app="a", goal="g", screenshot=TINY_PNG_B64, history=_hist()))
+    assert seen == ["medium", "low"]
+    assert "[next-step] thinking=medium (reason: app switched)" in capsys.readouterr().out
+
+
+def test_prompt_optional_sections_only_when_given():
+    base = dict(app="Zoom", goal="schedule a meeting", screenshot=TINY_PNG_B64, history=_hist(),
+                frontmost_app="Google Chrome")
+    plain = steps.build_prompt(NextStepIn(**base))
+    assert steps.context_section(NextStepIn(**base)) == ""
+    assert "换成了「" not in plain and "按下面的规则 E 处理" not in plain and "{" not in plain
+    p = steps.build_prompt(NextStepIn(**base, app_switched_from="Zoom"))
+    assert "从「Zoom」换成了「Google Chrome」" in p and "按下面的规则 E 处理" not in p
+    p = steps.build_prompt(NextStepIn(**base, confirmed={"kind": "click", "target": "开始时间",
+                                                         "detail": "focused AXComboBox '开始时间'"}))
+    assert "客户端已确认上一步：用户确实做了上一步（点击「开始时间」），之后辅助功能读到：focused AXComboBox '开始时间'。" in p
+    assert "换成了「" not in p
+    p = steps.build_prompt(NextStepIn(**base, guide=["Click your account", "Click Save"]))
+    assert "- Click your account\n- Click Save" in p
+    assert "- Click your account" not in plain
+    assert "先想清楚，再回答" in plain  # 静态的推理规则总是在
+
+
+def test_mock_fills_reasoning_fields(client, monkeypatch):
+    monkeypatch.setattr(steps.gemini, "MOCK", True)
+    j = client.post("/api/next-step", json={"app": "Zoom", "goal": "g", "screenshot": TINY_PNG_B64,
+                                            "app_switched_from": "Zoom", "frontmost_app": "Google Chrome"}).json()
+    assert j["status"] == "next" and j["app"] == "Google Chrome" and j["plan"] and j["situation"]
+    done = client.post("/api/next-step", json={"app": "a", "goal": "g", "screenshot": TINY_PNG_B64,
+                                               "history": [{"instruction": "x", "ok": True}] * 3}).json()
+    assert done["status"] == "done" and done["plan"] is None

@@ -10,7 +10,7 @@ import time
 from typing import Literal
 
 from PIL import Image
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError, field_validator
 
 from app import gemini
 
@@ -32,6 +32,14 @@ class Element(BaseModel):
 MAX_ELEMENTS = 250
 
 
+class Confirmed(BaseModel):
+    """客户端确认用户做了上一步（比如点击落在高亮的元素里）。detail = 之后辅助功能读到的，如 "focused AXComboBox '开始时间'"。"""
+
+    kind: Literal["click", "typing", "enter"]
+    target: str | None = None
+    detail: str | None = None
+
+
 class NextStepIn(BaseModel):
     app: str
     goal: str
@@ -43,6 +51,20 @@ class NextStepIn(BaseModel):
     user_note: str | None = None
     frontmost_app: str | None = None
     elements: list[Element] | None = None  # 读不到辅助功能时为 null，行为和以前完全一样
+    deep: bool = False  # 客户端要求多想一想（用 NEXT_STEP_DEEP_THINKING）
+    confirmed: Confirmed | None = None  # 客户端已确认上一步做了
+    app_switched_from: str | None = None  # 最前面的 App 刚换了：这里是之前那个，frontmost_app 是现在的
+
+    @field_validator("confirmed", mode="before")
+    @classmethod
+    def _lenient_confirmed(cls, v):
+        """confirmed 格式不对就当没传，不让整个请求 422（demo 现场不能崩）。"""
+        if v is None or isinstance(v, Confirmed):
+            return v
+        try:
+            return Confirmed.model_validate(v)
+        except ValidationError:
+            return None
 
 
 class NextGuess(BaseModel):
@@ -54,6 +76,11 @@ class NextGuess(BaseModel):
 
 
 class NextStepOut(BaseModel):
+    # 字段顺序就是模型输出的顺序：先想清楚情况（situation / reasoning / plan），再决定 status / box
+    situation: str | None = None  # 一句话：屏幕上现在是什么情况
+    reasoning: str | None = None  # 1–2 句：情况和目标的关系、为什么是这一步
+    plan: list[str] | None = None  # 剩下的步骤（包括这一步），最多 8 条
+    app: str | None = None  # 目标元素所在的 App
     status: Literal["next", "done", "unsure"]
     previous_ok: bool | None
     instruction: str
@@ -108,6 +135,25 @@ def find_element(elements: list[Element] | None, element_id: int | None) -> Elem
     return None
 
 
+MAX_PLAN = 8
+MAX_PLAN_ITEM = 80
+
+
+def _text(v, limit: int = 300) -> str | None:
+    """去掉首尾空白；不是字符串或为空就返回 None。"""
+    if not isinstance(v, str):
+        return None
+    v = " ".join(v.split())[:limit].strip()
+    return v or None
+
+
+def clean_plan(plan) -> list[str] | None:
+    if not isinstance(plan, (list, tuple)):
+        return None
+    items = [t for t in (_text(p, MAX_PLAN_ITEM) for p in plan) if t][:MAX_PLAN]
+    return items or None
+
+
 def finalize(out: NextStepOut, lang: str = "zh", elements: list[Element] | None = None) -> NextStepOut:
     """保证传给客户端的数据合法：next 一定有有效框，done / unsure 一定没有框。
     element_id 对得上请求里的控件时，用控件的精确框和名字；对不上就清空 element_id、保留模型的框。"""
@@ -130,13 +176,30 @@ def finalize(out: NextStepOut, lang: str = "zh", elements: list[Element] | None 
         guess = guess.model_copy(update={"label": guess.label.strip(), "instruction": guess.instruction.strip()})
     element_id = el.id if el is not None and status == "next" else None
     return out.model_copy(update={"status": status, "box": box, "instruction": instruction, "next_guess": guess,
-                                  "element_id": element_id})
+                                  "element_id": element_id, "situation": _text(out.situation),
+                                  "reasoning": _text(out.reasoning),
+                                  "plan": clean_plan(out.plan) if status != "done" else None,
+                                  "app": _text(out.app, 80)})
 
 
 _MOCK_BOXES = [[450, 450, 550, 550], [300, 600, 380, 720], [600, 250, 680, 400]]
 
 
 def mock_next_step(body: NextStepIn) -> NextStepOut:
+    out = _mock_step(body)
+    if out.status == "done":
+        return out
+    n = len(body.history)
+    switched = f"，刚从 {body.app_switched_from} 切过来" if body.app_switched_from else ""
+    return out.model_copy(update={
+        "situation": f"[MOCK] 第 {n + 1} 步的画面{switched}",
+        "reasoning": "[MOCK] 上一步已确认完成，继续下一步" if body.confirmed else "[MOCK] 按计划继续",
+        "plan": [f"[MOCK] 第 {i + 1} 步" for i in range(n, len(_MOCK_BOXES))],
+        "app": (body.frontmost_app or body.app or "").strip() or None,
+    })
+
+
+def _mock_step(body: NextStepIn) -> NextStepOut:
     n = len(body.history)
     previous_ok = True if n else None
     if n >= len(_MOCK_BOXES):
@@ -182,6 +245,27 @@ def elements_section(elements: list[Element]) -> str:
     return gemini.load_prompt("next_step_elements", elements="\n".join(lines))
 
 
+_KIND = {"click": "点击", "typing": "打字", "enter": "按回车"}
+
+
+def context_section(body: NextStepIn) -> str:
+    """可选的上下文（换了 App、客户端确认上一步做了）；都没有时是空字符串，prompt 和以前一样。"""
+    lines = []
+    prev = _clean(body.app_switched_from or "", 80)
+    if prev:
+        now = _clean(body.frontmost_app or "", 80) or "另一个 App"
+        lines.append(f"最前面的 App 刚刚换了：从「{prev}」换成了「{now}」（按下面的规则 D 判断新 App 是不是流程的一部分）。")
+    c = body.confirmed
+    if c is not None:
+        what = _KIND.get(c.kind, c.kind)
+        target = _clean(c.target or "", 80)
+        detail = _clean(c.detail or "", 120)
+        line = f"客户端已确认上一步：用户确实做了上一步（{what}" + (f"「{target}」" if target else "") + "）"
+        line += f"，之后辅助功能读到：{detail}。" if detail else "。"
+        lines.append(line + "（按下面的规则 E 处理）")
+    return "".join(f"\n{ln}\n" for ln in lines)
+
+
 def build_prompt(body: NextStepIn) -> str:
     if body.history:
         history = "\n".join(
@@ -201,6 +285,7 @@ def build_prompt(body: NextStepIn) -> str:
         guide=guide,
         user_note=(body.user_note or "").strip() or "（无）",
         frontmost_app=(body.frontmost_app or "").strip() or "（未知）",
+        context=context_section(body),
     )
     if body.elements:  # 没有 elements 时 prompt 和以前一字不差（评测结果可比）
         prompt += "\n" + elements_section(body.elements)
@@ -287,7 +372,30 @@ def refine_box(img: bytes, out: NextStepOut, force: bool = False) -> NextStepOut
 # next-step 的思考量："" = 模型默认；minimal / low / medium / high
 # 评测：default 93% / 4.4s，low 93% / 2.2s，minimal 85% / 1.3s → 默认 low
 THINKING = os.getenv("NEXT_STEP_THINKING", "low").strip().lower() or None
+# 需要真正推理的时候（第一步、换了 App、上一步没成功、用户说了话、客户端要求）可以多想一点。
+# 默认仍是 low：评测里 medium 平均 8.2 s/步，low 下 4 个推理用例照样 4/4、平均 2.9 s（推理主要靠 prompt）。
+# 想更深就设 NEXT_STEP_DEEP_THINKING=medium
+DEEP_THINKING = os.getenv("NEXT_STEP_DEEP_THINKING", "low").strip().lower() or None
 LAST_TIMING: dict[str, float] = {}  # 最近一次 next_step 各阶段耗时（毫秒），评测脚本读
+LAST_THINKING: dict[str, str | None] = {}  # 最近一次用的思考量和原因，评测脚本读
+
+
+def choose_thinking(body: NextStepIn) -> tuple[str | None, str]:
+    """返回 (thinking, 原因)。"""
+    reasons = []
+    if body.deep:
+        reasons.append("deep requested")
+    if not body.history:
+        reasons.append("first step")
+    if (body.user_note or "").strip():
+        reasons.append("user note")
+    if (body.app_switched_from or "").strip():
+        reasons.append("app switched")
+    if body.history and body.history[-1].ok is False:
+        reasons.append("previous step failed")
+    if reasons:
+        return DEEP_THINKING, ", ".join(reasons)
+    return THINKING, "routine"
 
 
 def next_step(body: NextStepIn) -> NextStepOut:
@@ -297,7 +405,11 @@ def next_step(body: NextStepIn) -> NextStepOut:
     mime = image_mime(img)
     prompt = build_prompt(body)
     t1 = time.perf_counter()
-    out = gemini.generate_json(prompt, NextStepOut, files=[(img, mime)], thinking=THINKING)
+    thinking, why = choose_thinking(body)
+    LAST_THINKING.clear()
+    LAST_THINKING.update(level=thinking, reason=why)
+    print(f"[next-step] thinking={thinking or 'default'} (reason: {why})")
+    out = gemini.generate_json(prompt, NextStepOut, files=[(img, mime)], thinking=thinking)
     t2 = time.perf_counter()
     if not body.history:
         out = out.model_copy(update={"previous_ok": None})
@@ -315,5 +427,5 @@ def next_step(body: NextStepIn) -> NextStepOut:
     LAST_TIMING.clear()
     LAST_TIMING.update(prep=(t1 - t0) * 1000, gemini=(t2 - t1) * 1000, post=(t3 - t2) * 1000, total=(t3 - t0) * 1000)
     print(f"[next-step] 解码+prompt {LAST_TIMING['prep']:.0f}ms · Gemini {LAST_TIMING['gemini']:.0f}ms · "
-          f"修框 {LAST_TIMING['post']:.0f}ms · 合计 {LAST_TIMING['total']:.0f}ms（thinking={THINKING or 'default'}）")
+          f"修框 {LAST_TIMING['post']:.0f}ms · 合计 {LAST_TIMING['total']:.0f}ms（thinking={thinking or 'default'}）")
     return out

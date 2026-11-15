@@ -25,15 +25,15 @@ from pathlib import Path
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
-from showme import api, apps, ax_snap, ax_tree, capture, enroll, ocr, sync, wording
+from showme import api, apps, ax_snap, ax_tree, capture, enroll, ocr, reasoning, sync, wording
 from showme.change import ChangeDetector, _diff, mask_rects
-from showme.config import (AX_ELEMENTS, CHANGE_THRESHOLD, CLICK_EXTRA_PAD, DEBUG_DETECT, HIGHLIGHT_PAD, LOG, MIC_MAX_S, POLL_S,
-                           NEAR_CLICK_PT, SETTLE_MAX_S, SETTLE_MIN_S, SETTLE_NOCHANGE_MAX_S, SETTLE_POLL_S, TALK_MAX_S)
+from showme.config import (AX_ELEMENTS, CHANGE_THRESHOLD, CLICK_EXTRA_PAD, CLICK_SETTLE_MAX_S, DEBUG_DETECT, HIGHLIGHT_PAD, LOG, MIC_MAX_S, POLL_S,
+                           RECHECK_AFTER_S, RECHECK_MIN_GAP_S, SETTLE_MAX_S, SETTLE_MIN_S, SETTLE_NOCHANGE_MAX_S, SETTLE_POLL_S, TALK_MAX_S)
 from showme.coords import box_to_rect, expand, same_target
 from showme.i18n import t
 from showme.agent import AgentSession, MainThread
 from showme.hotkey import RightOptionMonitor
-from showme.inputwatch import InputWatcher, click_in_rect, near_rect, step_kind
+from showme.inputwatch import InputWatcher, click_in_rect, step_kind
 from showme.narrator import Narrator
 from showme.recorder import Recorder
 
@@ -125,12 +125,21 @@ class Controller(QObject):
         self._last_raw = None  # 轮询最近一帧（遮罩后）：画面变化触发时当「稳定」比较的起点
         self._n_filler = 0
         self._last_box: list[int] | None = None  # 上一个框：OCR 有多个候选时选离它近的
+        # /api/next-step 的 deep / confirmed / app_switched_from（reasoning.py）
+        self._prev_front: str | None = None  # 上一次请求时最前面的 App（跳过 ShowMe / 终端 / Claude / Python）
+        self._confirmed: dict | None = None  # 客户端确认用户做了上一步（点在框里 / 打完字 / 回车），下一次请求带上
+        self._last_result: dict | None = None  # 上一次 next-step 的返回
+        self._recent: list[tuple] = []  # 最近几次出框的 (instruction, target_label)
+        self._typed_keys = 0  # 打字步骤：这个框出来之后按过几次键（只计数，不记内容）
+        self._win_title: str | None = None  # 上一次请求时目标 App 聚焦窗口的标题（判断「弹出了新窗口」）
+        self._req_ax_app: str | None = None
         # 每一步只认一个主信号（step_kind）：click = 点在框里；type = 回车；key = 有按键。用户说 done → Agent 带 note 调 tool。
         # 画面变化只在两种情况下算：没有辅助功能权限（监听不到点击 / 按键）、或者没有框（unsure 之后等用户自己弄好）；
-        # 点在框外 NEAR_CLICK_PT 以内也算（框画偏了）。
+        # 点击按 mouse up 算：按下时框先藏起来；按下和松开都在框里才算完成，否则松开时框画回来。
         self._kind = "click"
         self._rebase = False  # 下一帧重取基准帧
-        self.inputs = InputWatcher(self._on_click, self._on_key)
+        self._down = None  # 鼠标按下时记的 (x, y, 当时框的 rect)
+        self.inputs = InputWatcher(self._on_mouse_up, self._on_key, on_down=self._on_mouse_down)
         self._inputs_ok = self.inputs.start()
         self.hotkey = RightOptionMonitor(self.toggle_talk)
         if not self.hotkey.start():
@@ -330,7 +339,9 @@ class Controller(QObject):
         self.overlay.clear()
         self.task = {"app": app, "goal": goal}
         self.history, self.expect, self.current, self.last_instruction = [], None, None, None
+        self._confirmed, self._last_result, self._recent, self._prev_front, self._typed_keys = None, None, [], None, 0
         self.guide = outline or None
+        self._guide_is_plan = False
         self._n_req = 0
         self.panel.set_running(True)
         self._update_steps()
@@ -442,10 +453,11 @@ class Controller(QObject):
         }
         if user_note:  # 只有 /api/chat 返回 advance 时才带
             payload["user_note"] = user_note
+        ax_app = self._next_fields(payload, user_note)
         t0 = time.time()
 
         def call():
-            self._add_elements(payload)
+            self._add_elements(payload, ax_app)
             r = api.next_step({**payload, "screenshot": capture.to_jpeg_b64(img)})
             r = self._after_next(r, payload)
             self._log_turn("next", img, payload, r, t0)
@@ -457,12 +469,45 @@ class Controller(QObject):
 
         self._bg(call, self._on_result, failed)
 
-    def _add_elements(self, payload: dict):
+    def _next_fields(self, payload: dict, user_note: str | None) -> str | None:
+        """主线程，组 next-step 请求时调（_request / _tool_prepare）：app_switched_from、confirmed、deep。
+        返回这次读哪个 App 的控件（最前面的；是 ShowMe / 终端之类时用任务的软件）。出任何错都只是不带这些字段。"""
+        try:
+            front = payload.get("frontmost_app")
+            sw = reasoning.switched_from(self._prev_front, front)
+            if reasoning.real_front(front):
+                self._prev_front = front
+            if sw:
+                payload["app_switched_from"] = sw
+                print(f"[app] switched {sw} → {front}", flush=True)
+            conf, self._confirmed = self._confirmed, None
+            if conf:
+                payload["confirmed"] = conf
+            if reasoning.want_deep(self.history, sw, self._last_result, user_note, self._recent):
+                payload["deep"] = True
+            return reasoning.ax_app(front, self.task["app"] if self.task else None)
+        except Exception as e:  # noqa: BLE001
+            print(f"[reason] 组请求字段出错：{e}", flush=True)
+            return payload.get("app")
+
+    def _add_elements(self, payload: dict, ax_app: str | None = None):
         """后台线程，截图之后马上调：目标 App 能点的控件（AX 精确框）放进 payload["elements"]（日志里也会有）。
-        AX 不可用 / 什么都没读到 → 不带这个字段。"""
+        AX 不可用 / 什么都没读到 → 不带这个字段。ax_app：读哪个 App（默认 payload["app"]）。
+        带 confirmed 时顺便读聚焦的控件 / 新窗口，填进 confirmed.detail。"""
+        app = ax_app or payload.get("app")
+        conf = payload.get("confirmed")
+        if AX_ELEMENTS:
+            info = ax_tree.focus_info(app)
+            if isinstance(conf, dict):
+                conf["detail"] = ax_tree.focus_detail(info, self._win_title)
+            if info:
+                self._win_title = info[2]
+        if isinstance(conf, dict):
+            print(f"[step] confirmed {conf.get('kind')} → {conf.get('target')!r}"
+                  f"{' (' + conf['detail'] + ')' if conf.get('detail') else ''}", flush=True)
         if not AX_ELEMENTS:
             return
-        els = ax_tree.collect(payload.get("app"), self._screen_wh)
+        els = ax_tree.collect(app, self._screen_wh)
         if els:
             payload["elements"] = els
 
@@ -533,6 +578,7 @@ class Controller(QObject):
         self._last_box = list(box)
         self.overlay.show_target(rect, text)
         self.last_instruction = text
+        self._typed_keys = 0
         self._sync_step = len(self.history) + 1
         self._user_turn_since_step = False
         sync.box(self._sync_step, kind, text)
@@ -548,6 +594,7 @@ class Controller(QObject):
         if self.history and r.get("previous_ok") is False:
             self.history[-1]["ok"] = False
         status, text = r.get("status"), r.get("instruction") or ""
+        Controller._apply_reasoning(self, r)
         self.panel.set_status("")
         prov, self._provisional = self._provisional, None
         self._guess = r.get("next_guess") if status == "next" else None
@@ -609,6 +656,36 @@ class Controller(QObject):
                     self.agent.context(f"[step] Unsure: {msg}")
             self._wait()
 
+    def _apply_reasoning(self, r: dict):
+        """返回里的 situation / reasoning / plan / app（都可选）：记日志、换大纲、换任务软件、告诉 Agent。永不抛异常。"""
+        try:
+            self._last_result = r
+            if r.get("status") == "next" and r.get("box"):
+                recent = getattr(self, "_recent", None)
+                if recent is None:
+                    self._recent = recent = []
+                recent.append((r.get("instruction"), r.get("target_label")))
+                del recent[:-3]
+            sit, why = r.get("situation"), r.get("reasoning")
+            if sit or why:
+                print(f"[reason] {sit or ''} | {why or ''}", flush=True)
+            plan = reasoning.plan_of(r)
+            if plan:
+                self.guide = plan
+                self._guide_is_plan = True  # 后端的 plan = 剩下的步骤，第一项就是这一步
+                print(f"[plan] {len(plan)} steps: {plan[0]}…", flush=True)
+                if self.task is not None:
+                    self._update_steps()
+            app = r.get("app")
+            if self.task is not None and isinstance(app, str) and app.strip() and app.strip() != self.task.get("app"):
+                print(f"[app] task app {self.task.get('app')} → {app.strip()}", flush=True)
+                self.task["app"] = app.strip()
+            ctx = reasoning.reason_context(r)
+            if ctx and self.agent and self.agent.active:
+                self.agent.context(ctx)
+        except Exception as e:  # noqa: BLE001
+            print(f"[reason] 处理返回出错：{e}", flush=True)
+
     def _on_error(self, e):
         self.poll.stop()
         self.state = PAUSED
@@ -624,6 +701,7 @@ class Controller(QObject):
         self._t_change = None
         self._step_done = False
         self._step_reason = None
+        self._confirmed = None  # 重新等这一步：之前确认的作废（请求组好时已经取走了）
         self._settle = None
         self._last_raw = None
         self.poll.setInterval(int(POLL_S * 1000))
@@ -701,13 +779,18 @@ class Controller(QObject):
         self._step_done = True
         self._step_reason = reason
         self._t_change = time.perf_counter()
+        self._done_mono = time.monotonic()  # 用户做完的时刻（点击 = 松开）：复查从这里算 RECHECK_AFTER_S
         print(f"[step] 完成（{reason}{'/' + detail if detail else ''}）：{self.last_instruction!r}", flush=True)
+        # 点在框里 / 打完字点别处或按 Tab / 回车：客户端确认做完了 → 下一次请求带 confirmed，后端不会因为画面没怎么变就让再做一遍
+        self._confirmed = reasoning.confirmed(reason, (getattr(self, "current", None) or {}).get("target_label"))
+        # 确认过的点击 / 打字：画面没变最多等 CLICK_SETTLE_MAX_S；只有画面变化（和回车：常常要加载）还等慢窗口
+        nochange_max = CLICK_SETTLE_MAX_S if reason in ("click", "typing") else SETTLE_NOCHANGE_MAX_S
         # 不马上截图：菜单还在弹、窗口还在加载时截到旧画面，Gemini 会以为用户没点，又让点同一个（日志里 22 处）
         # 不管哪种信号，都从新的一帧开始比、至少等 SETTLE_MIN_S（画面变化触发那一帧不能当「稳定」的起点）
         # 先等画面「变了」（和做之前那一帧比），再等它稳定：网页点完要过一会儿才开始变，太早截到的还是旧画面
         self._settle = {"t0": time.monotonic(), "reason": reason, "n": 0, "min": SETTLE_MIN_S, "prev": None,
                         "base": self._last_raw, "changed": self._last_raw is None or reason == "screen_change",  # 画面变化触发：已经变了
-                        "t_changed": 0.0}
+                        "t_changed": 0.0, "nochange_max": nochange_max}
         self.poll.setInterval(int(SETTLE_POLL_S * 1000))
         if not self.poll.isActive():
             self.poll.start()
@@ -730,7 +813,7 @@ class Controller(QObject):
         if raw is not None and not st["changed"] and _diff(raw, st["base"]) > CHANGE_THRESHOLD:
             st["changed"] = True
             st["t_changed"] = el
-        cap = st["t_changed"] + SETTLE_MAX_S if st["changed"] else SETTLE_NOCHANGE_MAX_S
+        cap = st["t_changed"] + SETTLE_MAX_S if st["changed"] else st.get("nochange_max", SETTLE_NOCHANGE_MAX_S)
         if el >= cap or raw is None:
             how = ("截图失败" if raw is None else "画面一直没变，到时间了" if not st["changed"] else "一直在动，到时间了")
         elif st["changed"] and d is not None and d <= CHANGE_THRESHOLD and el >= st["min"]:
@@ -743,27 +826,55 @@ class Controller(QObject):
         self._on_screen_changed()
 
     def _on_click(self, x: float, y: float):
-        """全局左键按下（用户点的是别的 App）。点在当前框里（或框外 NEAR_CLICK_PT 以内：框画偏了）= 这一步完成。
-        OCR 秒出的框在 Gemini 核对回来之前也能点（_adopt_provisional）。"""
+        """在同一点按下又松开（测试 / 没有 mouse up 时的后备）。"""
+        self._on_mouse_down(x, y)
+        self._on_mouse_up(x, y)
+
+    def _on_mouse_down(self, x: float, y: float):
+        """全局左键按下（用户点的是别的 App）：记下位置和当时的框，框马上藏起来。
+        OCR 秒出的框在 Gemini 核对回来之前也能点。"""
+        self._cancel_recheck()  # 用户又点了：之后的画面变化是这次点击造成的
+        self._down = None
         prov = self.state == REQUESTING and self._provisional is not None
         if (self.state != WAITING and not prov) or self._step_done or self.overlay._rect is None:
             return
         r = self.overlay._rect
-        rect = (r.x(), r.y(), r.width(), r.height())
+        self._down = (x, y, (r.x(), r.y(), r.width(), r.height()))
+        suspend = getattr(self.overlay, "suspend", None)
+        if suspend is not None:
+            suspend()
+
+    def _on_mouse_up(self, x: float, y: float):
+        """全局左键松开：按下和松开都在框里 = 这一步完成（从松开时开始等画面）。
+        没点中（点在框外、拖出框外取消）→ 框画回来，这一步不算完成，之后截到的画面也不会被误当成「做完了」。"""
+        down, self._down = getattr(self, "_down", None), None
+        if down is None:
+            return
+        dx, dy, rect = down
+        if not self._click_completes((dx, dy), (x, y), rect):
+            resume = getattr(self.overlay, "resume", None)
+            if resume is not None:
+                resume()
+
+    def _click_completes(self, down_pt, up_pt, rect) -> bool:
+        prov = self.state == REQUESTING and self._provisional is not None
+        if (self.state != WAITING and not prov) or self._step_done:
+            return False  # 按下到松开之间，状态变了（新的一步、用户说话、停止）
         kind = step_kind(self._provisional["instruction"]) if prov else self._kind
-        if kind == "type":  # 打字步骤：点输入框是打字的一部分，不算完成
-            return
-        if click_in_rect((x, y), rect, CLICK_EXTRA_PAD):
-            reason = "click"
-        elif near_rect((x, y), rect, CLICK_EXTRA_PAD, NEAR_CLICK_PT):
-            reason = "click_near"
-            dbg(f"点在框外附近 ({x:.0f}, {y:.0f})：算完成（框可能画偏了）")
-        else:
-            dbg(f"点在框外 ({x:.0f}, {y:.0f})，不算完成")
-            return
-        if prov:
-            self._adopt_provisional()
-        self._step_completed(reason)
+        if kind == "type":  # 打字步骤：打过字之后点任何地方 = 打完了；还没打字时点输入框 → 框留着，告诉用户在哪打
+            if getattr(self, "_typed_keys", 0) > 0:
+                if prov:
+                    self._adopt_provisional()
+                self._step_completed("typing")
+                return True
+            return False
+        if click_in_rect(down_pt, rect, CLICK_EXTRA_PAD) and click_in_rect(up_pt, rect, CLICK_EXTRA_PAD):
+            if prov:
+                self._adopt_provisional()
+            self._step_completed("click")
+            return True
+        dbg(f"没点中框：按下 ({down_pt[0]:.0f}, {down_pt[1]:.0f}) 松开 ({up_pt[0]:.0f}, {up_pt[1]:.0f})，框画回来")
+        return False
 
     def _adopt_provisional(self):
         """用户在 Gemini 核对回来之前就照着 OCR 框做了：这一步就按 OCR 框算，丢掉还在路上的核对
@@ -782,13 +893,26 @@ class Controller(QObject):
         except Exception:  # noqa: BLE001
             self._last_raw = None
 
-    def _on_key(self, is_return: bool):
-        """全局按键：只看是不是回车，不记内容。打字步骤只认回车；快捷键步骤有按键就算。"""
+    def _on_key(self, is_return: bool, is_tab: bool = False):
+        """全局按键：只看是不是回车 / Tab，不记内容。打字步骤：回车 = enter，打过字再按 Tab = typing，
+        其它键只计数；快捷键步骤有按键就算。"""
+        self._cancel_recheck()  # 用户在打字：之后的画面变化是打字造成的
         prov = self.state == REQUESTING and self._provisional is not None and self.overlay._rect is not None
         if (self.state != WAITING and not prov) or self._step_done:
             return
         kind = step_kind(self._provisional["instruction"]) if prov else self._kind
-        reason = "enter" if kind == "type" and is_return else ("key" if kind == "key" else None)
+        if kind == "type":
+            typed = getattr(self, "_typed_keys", 0)
+            if is_return:
+                reason = "enter"
+            elif is_tab and typed > 0:
+                reason = "typing"
+            else:
+                if not is_tab:
+                    self._typed_keys = typed + 1
+                return
+        else:
+            reason = "key" if kind == "key" else None
         if reason is None:
             return
         if prov:
@@ -812,7 +936,10 @@ class Controller(QObject):
         except Exception as e:  # noqa: BLE001
             self._on_error(api.ApiError(t("capture_failed", e=e)))
             return
+        confirmed = self._confirmed  # _request 会取走它；复查重问时要再带上
+        expect = self.expect
         self._request(img=img, front=front)  # Gemini 照常核对
+        self._schedule_recheck(img, confirmed, expect)
         if not label:
             return
         instr = guess.get("instruction") or t("click_label", label=label)
@@ -840,6 +967,48 @@ class Controller(QObject):
 
         self._bg_free(locate, found, lambda e: print(f"[ocr] {_msg(e)}", flush=True))
 
+    # ================= 复查：截早了就用最新画面重新问 =================
+    def _schedule_recheck(self, img, confirmed, expect):
+        """用户做完一步、正式截图发出去之后：从用户做完那一刻算 RECHECK_AFTER_S 秒（至少截图后 RECHECK_MIN_GAP_S 秒）
+        再截一张缩略图。软件响应得慢、第一张截早了 → _recheck_tick 用最新画面重新问。"""
+        now = time.monotonic()
+        done = getattr(self, "_done_mono", None) or now
+        delay = max(RECHECK_AFTER_S - (now - done), RECHECK_MIN_GAP_S)
+        rc = {"img": img, "token": self._token, "hist": len(self.history), "confirmed": confirmed, "expect": expect}
+        self._recheck = rc
+        QTimer.singleShot(int(delay * 1000), lambda: self._recheck_tick(rc))
+
+    def _cancel_recheck(self):
+        """用户又点了 / 按了键 / 说了话：之后画面的变化是新的操作造成的，不复查。"""
+        self._recheck = None
+
+    def _recheck_tick(self, rc):
+        if getattr(self, "_recheck", None) is not rc:
+            return  # 已经作废（用户又操作了 / 换了一步）
+        self._recheck = None
+        if self.task is None or self.state not in (REQUESTING, WAITING) or self._token != rc["token"] \
+                or len(self.history) != rc["hist"] or getattr(self, "_step_done", False):
+            return  # 停止了、用户说了话、已经进到下一步，或者用户已经在做下一步
+        try:
+            now = capture.grab()
+            self._grow_masks()
+            d = _diff(self._masked(capture.to_small_gray(now)), self._masked(capture.to_small_gray(rc["img"])))
+        except Exception as e:  # noqa: BLE001  复查失败不影响主流程
+            dbg(f"[recheck] 截图失败：{e}")
+            return
+        if d <= CHANGE_THRESHOLD:
+            print(f"[recheck] {RECHECK_AFTER_S:.1f} s 后画面没变（diff={d:.4f}）：刚才那张就是最新的", flush=True)
+            return
+        print(f"[recheck] 截图之后画面又变了（diff={d:.4f}）：第一张截早了 → 用最新画面重新问", flush=True)
+        self._token += 1  # 丢掉按旧画面算的结果（还没回来的那个）
+        self._provisional = None
+        if self.state == WAITING:  # 旧结果已经显示了：撤掉它
+            self.overlay.clear()
+            self.narrator.stop()
+        self.expect = rc["expect"]
+        self._confirmed = rc["confirmed"]  # 用户确实做了上一步：重问时照样告诉后端
+        self._request(img=now, front=apps.frontmost_app())
+
     def _fetch_guide(self):
         """后端用官方文档生成步骤大纲。没有这个接口 / 失败都没关系。"""
         app, goal, lang = self.task["app"], self.task["goal"], self.lang
@@ -847,14 +1016,19 @@ class Controller(QObject):
         def got(g):
             if g and g.get("outline") and not self.guide:
                 self.guide = g["outline"]
+                self._guide_is_plan = False
                 self._update_steps()
 
         self._bg(lambda: api.guide(app, goal, lang), got, lambda _e: None)
 
     def _update_steps(self):
         done = [h["instruction"] for h in self.history]
-        n = len(done) + (1 if self.last_instruction else 0)
-        upcoming = (self.guide or [])[n:]
+        if getattr(self, "_guide_is_plan", False):
+            # 后端的 plan 是「剩下的步骤（含这一步）」：后面的步骤从第 2 项开始
+            upcoming = (self.guide or [])[1:]
+        else:  # /api/guide 的大纲是从头开始的完整步骤
+            n = len(done) + (1 if self.last_instruction else 0)
+            upcoming = (self.guide or [])[n:]
         self.panel.set_steps(done, self.last_instruction, upcoming)
 
     # ================= 实时语音（ElevenLabs Agent）=================
@@ -983,7 +1157,7 @@ class Controller(QObject):
         except Exception as e:  # noqa: BLE001
             msg = str(e)
             return msg if msg.startswith("STOPPED:") else f"ERROR: could not take a screenshot ({e})"
-        self._add_elements(payload)  # 这里已经在 Agent 的线程里，不占主线程
+        self._add_elements(payload, self._req_ax_app)  # 这里已经在 Agent 的线程里，不占主线程
         try:
             r = api.next_step({**payload, "screenshot": capture.to_jpeg_b64(img)})
         except api.ApiError as e:
@@ -1036,6 +1210,7 @@ class Controller(QObject):
                    "expect": self.expect, "guide": self.guide, "frontmost_app": front}
         if note:
             payload["user_note"] = note
+        self._req_ax_app = self._next_fields(payload, note)
         return img, payload
 
     def tool_look_at_screen(self, params: dict) -> str:

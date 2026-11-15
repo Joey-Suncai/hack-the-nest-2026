@@ -32,12 +32,15 @@
   "elements": [
     { "id": 1, "role": "AXButton", "name": "New Tab", "box": [40, 950, 62, 966] },
     { "id": 2, "role": "AXTextField", "name": null, "box": [120, 300, 140, 700] }
-  ]
+  ],
+  "deep": false,
+  "confirmed": { "kind": "click", "target": "开始时间", "detail": "focused AXComboBox '开始时间'" },
+  "app_switched_from": "Zoom"
 }
 ```
   - `history`：已经给出过的步骤，最早的在前，最多传最近 10 条
   - `expect`：上一步返回的 `expect`；第一步传 `null`
-  - `guide`：`/api/guide` 返回的 `outline`；没有就传 `null`
+  - `guide`：运行中的计划。第一步传 `/api/guide` 返回的 `outline`（没有就传 `null`）；之后传**上一次 `/api/next-step` 返回的 `plan`**（`plan` 为 `null` 时沿用之前的 `guide`）
   - `user_note`（可选）：`/api/chat` 返回的 `note`（用户刚说的话的要点，比如「点错了」「这步做完了」），Gemini 判断下一步时会考虑；没有就不传或传 `null`
   - `frontmost_app`（可选）：客户端用 NSWorkspace 读到的当前最前面的 App 名字（截图前读），作为「用户现在在哪个软件」的参考；和 `app` 不一样时（用户切到别的软件了），后端按截图判断，必要时返回 `unsure` 并提示用户切回 `app`。读不到就不传或传 `null`
   - `elements`（可选）：客户端用 macOS 辅助功能（Accessibility）读到的屏幕上的真实控件，每个控件的框是精确的。Gemini 优先按编号选其中一个，后端直接用它的框
@@ -47,9 +50,17 @@
     - `box`：`[ymin, xmin, ymax, xmax]` 整数，相对**同一张全屏截图** 0–1000 归一化（和返回的 `box` 同一个约定）
     - 最多 250 个，按从上到下、再从左到右排序
     - 辅助功能不可用时不传或传 `null`：行为和以前完全一样（prompt 一字不差）
+  - `deep`（可选，`bool`，默认 `false`）：客户端要求多想一想。后端在以下任一情况用 `NEXT_STEP_DEEP_THINKING`（默认 `medium`），否则用 `NEXT_STEP_THINKING`（默认 `low`）：`deep = true`、`history` 为空（第一步）、`user_note` 有值、`app_switched_from` 有值、`history` 最后一条 `ok = false`。medium 实测每步约 8 秒（low 约 2 秒）
+  - `confirmed`（可选，默认 `null`）：客户端确认用户**确实做了上一步**（比如点击落在高亮的元素里）。`{ "kind": "click" | "typing" | "enter", "target": str | null, "detail": str | null }`；`target` 是上一步的目标（一般是上一步的 `target_label`），`detail` 是之后辅助功能读到的（如 `"focused AXComboBox '开始时间'"`、`"new window 'Google Calendar'"`）。Gemini 会把上一步当作已完成，不再重复同一句；只获得焦点时给后续动作（再点开列表 / 输入 / 从列表选）。格式不对（比如 `kind` 不认识）就当没传，不会 422
+  - `app_switched_from`（可选，默认 `null`）：最前面的 App 自上一步以来换了时，填**之前**那个 App 的名字（`frontmost_app` 是现在的）。Gemini 判断新 App 是不是流程的一部分（例如 Zoom 的保存打开了 Chrome 里的 Google 登录页 → 就在 Chrome 里继续，不让用户切回 Zoom）
+  - 这三个字段都不传时，行为和以前一样（prompt 只多了静态的推理规则）
 - 返回：
 ```json
 {
+  "situation": "图表菜单已经打开，里面有二维柱状图",
+  "reasoning": "目标是柱状图，选二维的第一个就行",
+  "plan": ["点击『二维』下面的第一个柱状图", "确认表格旁边出现柱状图"],
+  "app": "Numbers",
   "status": "next",
   "previous_ok": true,
   "instruction": "在菜单里点击『二维』下面的第一个柱状图",
@@ -69,11 +80,16 @@
   - `target_label`：元素上能看到的文字（没有文字就写简短描述），客户端用来做 OCR 吸附
   - `next_guess`（可选，可能为 `null`）：预测**这一步点完之后**，下一步要点的元素。`label` 是那个元素上的原文（一定有文字），`instruction` / `expect` 同上。只在比较有把握时给。用法：画面一变，客户端先在新截图里用本地 OCR 找 `label`，找到就立刻画框、念 `instruction`；同时照常调 `/api/next-step` 核对，结果不一样再更正框和指令
   - `element_id`（`int | null`，默认 `null`）：选中的 `elements` 里的 `id`；`null` 表示框是 Gemini 自己给的坐标（没传 `elements`、目标不在列表里、或者模型给的编号对不上）。有值时 `box` 就是那个控件的 `box`（经过同样的取整 / 裁剪），`target_label` 是它的 `name`（`name` 为空时保留模型的描述），并且不做裁剪放大精修。只有 `status = "next"` 时可能有值
+  - `situation`（`str | null`）：一句话，屏幕上现在是什么情况，用 `lang`（如 "Chrome opened the Google sign-in page; Gmail is not signed in."）
+  - `reasoning`（`str | null`）：1–2 句短话，情况和目标的关系 / 为什么是这一步，用 `lang`（如 "Gmail needs you to sign in first; this is part of the task, not a wrong page."）。客户端可以发给 Agent：`[step] ... Situation: … Why: …`，用户问「为什么」时 Agent 用它回答
+  - `plan`（`list[str] | null`）：剩下的步骤（包括这一步，第一项就是这一步），最多 8 条，每条最多 80 个字符，用 `lang`。下一次请求原样放进 `guide`。`status = "done"` 时为 `null`
+  - `app`（`str | null`）：目标元素所在的 App（如 `"Google Chrome"`）
+  - 这四个字段后端都会清洗：去首尾空白，空字符串 → `null`；`plan` 去掉空项、每条截到 80 字符、最多 8 条，全空 → `null`。模型没给时为 `null`，客户端必须能处理 `null`
 - 错误：
   - `400` `{ "error": "screenshot 不是有效的图片" }`、`{ "error": "goal 不能为空" }`
   - `422` 缺字段
   - `429 / 502 / 504` Gemini 相关（同 `backend/app/gemini.py` 里的说明）
-- mock（`GEMINI_MOCK=1`）：按 `history` 长度依次返回 3 个固定步骤（框在屏幕中央附近），第 4 次返回 `done`；传了 `elements` 时，前 3 次改为返回第一个有 `name` 的控件（`element_id`、`box`、`target_label` 都取自它）
+- mock（`GEMINI_MOCK=1`）：按 `history` 长度依次返回 3 个固定步骤（框在屏幕中央附近），第 4 次返回 `done`；传了 `elements` 时，前 3 次改为返回第一个有 `name` 的控件（`element_id`、`box`、`target_label` 都取自它）；`status = "next"` 时 `situation` / `reasoning` / `plan` / `app` 也会填上 `[MOCK]` 假数据（`app` = `frontmost_app` 或 `app`）
 
 ## `POST /api/chat`（对话模式）
 - 用途：用户在面板里用自然语言（打字或语音转文字）跟 ShowMe 对话：开始任务、中途提问、说做完 / 跳过 / 点错、换目标、停止。后端判断该怎么做（`action`），并给一句回复
