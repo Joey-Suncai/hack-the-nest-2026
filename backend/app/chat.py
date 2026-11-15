@@ -121,6 +121,42 @@ def mock_chat(body: ChatIn) -> ChatOut:
                    action="resume", app=None, goal=None, outline=None, note=None)
 
 
+_LANG_NAME = {"zh": "简体中文", "en": "English"}
+
+
+def _task_text(task: TaskState | None) -> str:
+    if task is None:
+        return "（没有进行中的任务）"
+    lines = [f"软件：{task.app}", f"目标：{task.goal}"]
+    if task.outline:
+        lines.append("步骤大纲：" + " / ".join(task.outline))
+    if task.history:
+        done = [f"{i}. {h.instruction}" + ("（没完成）" if h.ok is False else "")
+                for i, h in enumerate(task.history, 1)]
+        lines.append("已经给过的步骤：\n" + "\n".join(done))
+    if task.current:
+        c = task.current
+        lines.append(f"当前这一步（正在等用户做）：{c.instruction}"
+                     + (f"（要点的元素：{c.target_label}）" if c.target_label else "")
+                     + (f"；做完后应该看到：{c.expect}" if c.expect else ""))
+    else:
+        lines.append("当前这一步：（还没有）")
+    return "\n".join(lines)
+
+
+def build_prompt(body: ChatIn) -> str:
+    who = {"user": "用户", "assistant": "ShowMe"}
+    messages = "\n".join(f"{who[m.role]}：{m.text}" for m in body.messages) or "（无）"
+    return gemini.load_prompt(
+        "chat", task=_task_text(body.task), messages=messages,
+        message=body.message.strip(), lang_name=_LANG_NAME[body.lang],
+    )
+
+
 def chat(body: ChatIn) -> ChatOut:
-    """真实 Gemini 版（下一步实现）。暂时用 mock。"""
-    return mock_chat(body)
+    """真实 Gemini 版：截图 + 对话 + 任务进度 → 回复和 action。结果一定经过 finalize_chat。"""
+    from app.steps import decode_screenshot, image_mime
+
+    img = decode_screenshot(body.screenshot)
+    raw = gemini.generate_json(build_prompt(body), ChatRaw, files=[(img, image_mime(img))])
+    return finalize_chat(raw, has_task=body.task is not None, lang=body.lang)

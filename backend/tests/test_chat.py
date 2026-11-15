@@ -82,3 +82,19 @@ def test_endpoint_mock(client, monkeypatch):
     assert j["action"] == "start" and j["goal"] == "做柱状图" and set(j) == {"reply", "action", "app", "goal", "outline", "note"}
     r = client.post("/api/chat", json={"lang": "zh", "message": "做完了", "screenshot": TINY_PNG_B64, "task": TASK})
     assert r.json()["action"] == "advance"
+
+
+def test_build_prompt_includes_task_and_messages():
+    b = ChatIn(lang="en", message="what is this?", screenshot=TINY_PNG_B64, task=TASK,
+               messages=[{"role": "user", "text": "hi"}, {"role": "assistant", "text": "hello"}])
+    p = chat.build_prompt(b)
+    assert "Numbers" in p and "做柱状图" in p and "点图表" in p and "图表" in p and "出现菜单" in p
+    assert "用户：hi" in p and "ShowMe：hello" in p and "what is this?" in p and "English" in p
+    assert "{" not in p.replace("{task}", "")
+
+
+def test_chat_finalizes_model_output(monkeypatch):
+    monkeypatch.setattr(chat.gemini, "generate_json",
+                        lambda *a, **k: ChatRaw(reply="ok", action="weird", app="X", goal="Y"))
+    out = chat.chat(body("嗯", TASK))
+    assert out.action == "resume" and out.app is None
