@@ -31,8 +31,17 @@ RETRIES = int(os.getenv("GEMINI_RETRIES", "2"))
 # 对冲请求：第一次请求这么多秒还没回来就再发一次一样的，谁先回来用谁。
 # 日志：大部分 2–3 s，偶尔一次挂满 30 s 才回 504 DEADLINE_EXCEEDED，重试 2.5 s 就好 → 一步卡 32–45 s。0 = 关掉
 HEDGE_AFTER_S = float(os.getenv("GEMINI_HEDGE_AFTER", "6"))
-# 输出上限：防止偶尔「停不下来」一直生成到超时（正常的结构化回答几百个 token）
-MAX_OUTPUT_TOKENS = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "4096"))
+# 输出上限：结构化输出偶尔卡在一个数字上无限重复（"2525…"），写满上限才停。正常回答 250–300 token
+# （重放时最长见过一次 1638），上限 4096 时卡死要白跑约 16 s；1000 → 3–4 s 就截断、马上重发。
+# 思考更深（medium / high / 模型默认）时思考也可能算进输出，上限用 MAX_OUTPUT_TOKENS_DEEP
+MAX_OUTPUT_TOKENS = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "1000"))
+MAX_OUTPUT_TOKENS_DEEP = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS_DEEP", "4096"))
+
+
+def output_cap(thinking: str | None) -> int | None:
+    """这次调用的输出上限；0 = 不设。"""
+    cap = MAX_OUTPUT_TOKENS if (thinking or "").lower() in ("minimal", "low") else MAX_OUTPUT_TOKENS_DEEP
+    return cap or None
 _pool = None
 GROUNDED_TRIES = 3  # generate_grounded 并发几次（见函数说明）
 
@@ -211,7 +220,7 @@ def generate_json(
         response_mime_type="application/json",
         response_schema=schema,
         thinking_config=types.ThinkingConfig(thinking_level=thinking.upper()) if thinking else None,
-        max_output_tokens=MAX_OUTPUT_TOKENS or None,
+        max_output_tokens=output_cap(thinking),
     )
     def parse(resp):
         if "MAX_TOKENS" in _finish_reason(resp):  # 写满上限：半截 JSON，或者卡在某个字段里无限重复

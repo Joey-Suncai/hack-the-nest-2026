@@ -108,3 +108,12 @@ def test_generate_json_treats_max_tokens_as_unusable(monkeypatch):
     monkeypatch.setattr(gemini, "_get_client", lambda: type("C", (), {"models": type("M", (), {
         "generate_content": lambda self, model, contents, config: next(replies)})()})())
     assert gemini.generate_json("p", Out).a == 1
+
+
+def test_output_cap_is_tight_for_low_thinking_and_loose_for_deeper(monkeypatch):
+    monkeypatch.setattr(gemini, "MAX_OUTPUT_TOKENS", 1000)
+    monkeypatch.setattr(gemini, "MAX_OUTPUT_TOKENS_DEEP", 4096)
+    assert gemini.output_cap("low") == 1000 and gemini.output_cap("minimal") == 1000
+    assert gemini.output_cap("medium") == 4096 and gemini.output_cap(None) == 4096  # 思考可能算进输出
+    monkeypatch.setattr(gemini, "MAX_OUTPUT_TOKENS", 0)
+    assert gemini.output_cap("low") is None
