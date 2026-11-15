@@ -108,7 +108,6 @@ class Controller(QObject):
         self._t_change: float | None = None  # 画面变化被检测到的时刻（算出框耗时）
         self._sync_step: int | None = None  # 计时：当前显示的是第几步（[sync] 日志）
         self._user_turn_since_step = True  # 这一步出框之后用户有没有开过口 / 打过字
-        self.step_listener = self._agent_notify  # 新的一步出来时回调 (instruction, kind)
         self.main = MainThread()  # Agent 的 client tool 在 SDK 线程里跑，碰界面 / 截图要转到主线程
         self.agent: AgentSession | None = None
         self._enrolling = False
@@ -162,6 +161,8 @@ class Controller(QObject):
         if self.agent and self.agent.active:  # 实时语音模式：打字也交给 Agent（同一个「大脑」）
             self._user_turn_since_step = True
             self._remember("user", text)
+            if self.agent.audio:
+                self.agent.audio.new_user_turn()
             if not self.agent.send(text):
                 self.panel.set_error(t("live_unavailable"))
             return
@@ -464,10 +465,34 @@ class Controller(QObject):
         except Exception as e:  # noqa: BLE001  记录失败不影响主流程
             print(f"[log] 记录失败：{e}")
 
-    def _say_step(self, text: str):
-        # 刚回复过用户：这一步排在回复后面读；否则打断上一句没读完的
-        self.narrator.say(text, interrupt=not self._speak_after_reply, tag=self._sync_step)
+    def _present_step(self, box: list[int], text: str, kind: str):
+        """所有出框的地方都走这里（OCR 秒出 / Gemini / Gemini 更正 / tool）：画框，同一刻客户端自己念，
+        并用背景消息告诉 Agent 进行到第几步。kind：ocr / gemini / correction / tool。"""
+        self._show_step(box, text, kind)
+        self._speak_step(text)
+        if self.agent and self.agent.active:
+            self.agent.context(f"[step] Step {self._sync_step} shown: {text}")
+
+    def _speak_step(self, text: str, tag: int | None = None):
+        """客户端念一步（或画面变化路径里的 done / unsure）：先停掉上一步还在念 / 还在下载的，
+        再清掉 Agent 正在放的声音（并丢掉它在路上的，直到用户下一次开口）。"""
+        tag = self._sync_step if tag is None else tag
+        a = self.agent.audio if self.agent else None
+        if a is not None:
+            a.drop_for_client()
+        if self._talking:  # 用户正按着键说话：不出声，免得被麦克风收进去（框照样画）
+            sync.log(f"step {tag} voice skipped (user is talking)")
+            self.narrator.stop()
+            return
+        # 刚回复过用户（打字模式）：这一步排在回复后面读；否则打断上一句没读完的
+        self.narrator.say(text, interrupt=not self._speak_after_reply, tag=tag)
         self._speak_after_reply = False
+
+    def _let_agent_speak(self):
+        """tool 返回 DONE / UNSURE：这句由 Agent 说。停掉客户端在念的，别丢 Agent 的声音。"""
+        self.narrator.stop()
+        if self.agent and self.agent.audio:
+            self.agent.audio.allow_agent()
 
     def _show_step(self, box: list[int], text: str, kind: str = "gemini"):
         rect = expand(box_to_rect(box, *self._screen_wh), HIGHLIGHT_PAD)
@@ -499,41 +524,47 @@ class Controller(QObject):
                 print(f"[speed] Gemini 核对：和 OCR 框一致（Gemini 用了 {(time.perf_counter() - self._t_change) * 1000:.0f} ms）", flush=True)
                 self._wait(base_img=self._req_img)  # 用户可能在等 Gemini 时已经点了：用那张截图当基准帧
                 return
-            self._show_step(r["box"], text, "correction" if prov else ("tool" if source == "tool" else "gemini"))
+            if prov:  # Gemini 更正 OCR 的框：打断 OCR 那句，念更正后的
+                print(f"[speed] Gemini 更正：OCR 框 {prov['box']} → Gemini 框 {r['box']}", flush=True)
+                self.panel.add_message("step", t("step_fixed", n=len(self.history) + 1, text=text))
+                self._speak_after_reply = False
+            self._present_step(r["box"], text, "correction" if prov else ("tool" if source == "tool" else "gemini"))
             self.panel.allow_retry(True)
             self._update_steps()
             if prov:
-                print(f"[speed] Gemini 更正：OCR 框 {prov['box']} → Gemini 框 {r['box']}", flush=True)
-                self.panel.add_message("step", t("step_fixed", n=len(self.history) + 1, text=text))
-                self.narrator.say(text, interrupt=True, tag=self._sync_step)
-                self._notify(text, "correction")
                 self._wait(base_img=self._req_img)
             else:
                 self._speed_log("等 Gemini")
                 self.panel.add_step(len(self.history) + 1, text)
-                self._say_step(text)
-                self._notify(text, "gemini")
                 self._wait()
         elif status == "done":
+            # tool 要的（Agent 会祝贺）：客户端不念；画面变化路径里 Agent 不知道，客户端自己念
             self.overlay.clear()
             outro = wording.outro(self.task["app"], self.task["goal"], len(self.history), self.lang, text)
             self.panel.add_message("assistant", outro)
             self._remember("assistant", outro)
             self.panel.set_steps([h["instruction"] for h in self.history], None, [])
-            self.narrator.say(outro, interrupt=not self._speak_after_reply)
-            self._speak_after_reply = False
-            self._notify(text or t("done"), "done")
+            if source == "tool":
+                self._let_agent_speak()
+            else:
+                self._speak_step(outro, tag=len(self.history) + 1)
+                if self.agent and self.agent.active:
+                    self.agent.context(f"[step] Task done: {text or t('done')}")
             self._end_task(t("done"))
         else:  # unsure：比如要点的东西被挡住了 / 窗口没打开。画面一变就自动再问，也可以按「重试」
             self.overlay.clear()
-            self._notify(text or t("unsure"), "unsure")
             self.current, self.last_instruction = None, None
             msg = text or t("unsure")
             self.panel.add_message("assistant", msg)
             self._remember("assistant", msg)
             self.panel.set_status(t("unsure_hint"))
             self.panel.allow_retry(True)
-            self._say_step(msg)
+            if source == "tool":  # Agent 会转告
+                self._let_agent_speak()
+            else:
+                self._speak_step(msg, tag=len(self.history) + 1)
+                if self.agent and self.agent.active:
+                    self.agent.context(f"[step] Unsure: {msg}")
             self._wait()
 
     def _on_error(self, e):
@@ -560,15 +591,6 @@ class Controller(QObject):
         dbg(f"_wait：打字步骤={self._typing_step}")
         dbg(f"_wait：开始等画面变化 state={self.state} 基准帧={'用请求截图' if base_img is not None else '下一帧'} "
             f"轮询在跑={self.poll.isActive()} _typing={self._typing} 来源={getattr(self, '_result_source', None)}")
-
-    def _notify(self, text: str, kind: str):
-        if getattr(self, "_result_source", None) == "tool" and kind != "ocr":
-            return  # Agent 自己通过 show_next_step 要的这一步：它会念 tool 的返回值
-        if self.step_listener:
-            try:
-                self.step_listener(text, kind)
-            except Exception as e:  # noqa: BLE001
-                print(f"[agent] step_listener 出错：{e}", flush=True)
 
     def _masked(self, small):
         screen = QApplication.primaryScreen().geometry()
@@ -682,12 +704,10 @@ class Controller(QObject):
                     print(f"[speed] OCR 没找到 {label!r}（{ms:.0f} ms），等 Gemini", flush=True)
                 return
             self._provisional = {"box": box, "instruction": instr}
-            self._show_step(box, instr, "ocr")
+            self._present_step(box, instr, "ocr")
             self._speed_log(f"OCR 秒出，识别 {ms:.0f} ms")
             self.panel.add_step(len(self.history) + 1, instr)
             self._update_steps()
-            self._say_step(instr)
-            self._notify(instr, "ocr")
 
         self._bg_free(lambda: ocr.locate(img, label), found, lambda e: print(f"[ocr] {_msg(e)}", flush=True))
 
@@ -732,8 +752,7 @@ class Controller(QObject):
             self.panel.set_status(t("live_off"))
 
     def _on_agent_connected(self, engine_name: str):
-        self.narrator.stop()
-        self.narrator.muted = True
+        self.narrator.stop()  # 步骤由客户端念（不静音），对话由 Agent 说；两边不重叠见 _speak_step / _on_agent_voice_start
         self.panel.set_live_state(True)
         g = self.agent.gate
         self.panel.set_status(t("live_on", engine=engine_name))
@@ -775,8 +794,13 @@ class Controller(QObject):
     def _on_first_audio(self):
         self._timing("first_audio")
 
-    def _on_agent_voice_start(self):
+    def _on_agent_voice_start(self, gen: int):
+        """Agent 开口（回答问题）：停掉客户端还在念的步骤。gen 过期 = 这之后客户端又开始念新的一步了，不停。"""
         sync.voice(self._sync_step if self.task is not None else None, "agent")
+        a = self.agent.audio if self.agent else None
+        if a is not None and gen == a.drop_gen and self.narrator.speaking():
+            sync.log("client step speech stopped (agent is answering)")
+            self.narrator.stop()
 
     def _on_agent_user(self, text: str):
         self._user_turn_since_step = True
@@ -800,14 +824,6 @@ class Controller(QObject):
         elif kind == "accept":
             self.panel.set_status(t("listening_agent"))
 
-    def _agent_notify(self, text: str, kind: str):
-        """画面变化后的新一步 → 让 Agent 念出来。"""
-        if not (self.agent and self.agent.active):
-            return
-        prefix = {"ocr": "Next", "gemini": "Next", "correction": "Correction", "done": "DONE", "unsure": "UNSURE"}.get(kind)
-        if prefix:
-            self.agent.send(f"[screen changed] {prefix}: {text}")
-
     # ---- client tools（在 SDK 线程里调用）----
     def tool_show_next_step(self, params: dict) -> str:
         epoch, t0p = self._stop_epoch, time.perf_counter()
@@ -819,21 +835,25 @@ class Controller(QObject):
         try:
             img, payload = self.main.call(lambda: self._tool_prepare(goal, note))
         except Exception as e:  # noqa: BLE001
-            return f"ERROR: {e}"
+            msg = str(e)
+            return msg if msg.startswith("STOPPED:") else f"ERROR: could not take a screenshot ({e})"
         try:
             r = api.next_step({**payload, "screenshot": capture.to_jpeg_b64(img)})
         except api.ApiError as e:
             self._log_turn("next", img, payload, {"error": e.message}, t0)
             self.main.call(lambda: self._on_error(e))
-            return f"ERROR: {e.message}"
+            return f"ERROR: {_english(e)}"
+        except Exception as e:  # noqa: BLE001
+            return f"ERROR: {e}"
         self._log_turn("next", img, payload, r, t0)
         self._tool_time("show_next_step", t0p)
         if epoch != self._stop_epoch:  # 等 Gemini 时用户按了 Stop：不画框、不念
             print("[agent] show_next_step 结果回来时已经按了 Stop，丢掉", flush=True)
             return "STOPPED: the user pressed Stop"
+        if self.main.call(lambda: self.task is None or self.agent is None):
+            return "STOPPED: the task already ended"
         self.main.call(lambda: self._on_result(r, source="tool"))
-        status, text = r.get("status"), r.get("instruction") or ""
-        return text if status == "next" else f"{'DONE' if status == 'done' else 'UNSURE'}: {text}"
+        return tool_reply(r)
 
     def _tool_time(self, name: str, t0: float):
         ms = (time.perf_counter() - t0) * 1000
@@ -923,6 +943,7 @@ class Controller(QObject):
             self.agent.audio.sent_voice_frames, self.agent.audio.sent_voice_sumsq = 0, 0.0
         if self.agent.audio:  # Agent 正在说话 → 立刻停掉本地播放，用户说话期间丢掉它的声音
             self.agent.audio.silence_now()
+        self.narrator.stop()  # 客户端在念的步骤也停掉：用户要说话
         self._set_talking(True)
         self.talk_timer.start(TALK_MAX_S * 1000)
         delay = _play_sound("Tink")  # 提示音不走回声消除：放完再开始发麦克风声音，免得被当成用户说的话
@@ -940,7 +961,7 @@ class Controller(QObject):
         if self.agent and self.agent.gate:
             self.agent.gate.key_down = False  # 立刻改发静音帧：ElevenLabs 马上判断这句话说完了
         if self.agent and self.agent.audio:
-            self.agent.audio.muted = False
+            self.agent.audio.new_user_turn()  # 取消静音，也不再丢「客户端念步骤之后」到的声音：这是对用户这句话的回答
             self.agent.audio.await_first_audio = True
         self._turn = {"end": time.perf_counter()}
         self._set_talking(False)
@@ -1044,6 +1065,27 @@ def with_offer(reply: str, question: str) -> str:
         return reply
     return (f"{reply}\n\n[ShowMe note for the assistant] After you answer, ask the user in one short sentence: "
             f"\"Want me to show you step by step?\" If they say yes, call show_next_step with this as the goal: {question}")
+
+
+def tool_reply(r: dict) -> str:
+    """show_next_step 返回给 Agent 的字符串（前缀以 docs/API.md 为准，一字不差）。"""
+    status, text = r.get("status"), (r.get("instruction") or "").strip()
+    if status == "next" and r.get("box"):
+        return f"SHOWN: {text}"
+    if status == "done":
+        return f"DONE: {text}"
+    if status == "unsure" or status == "next":  # next 却没有框：当成 unsure
+        return f"UNSURE: {text}"
+    return f"ERROR: unexpected reply from the step service ({status!r})"
+
+
+def _english(e) -> str:
+    """ERROR: 后面要英文。后端的错误说明可能是中文 → 换成通用英文说明。"""
+    msg = getattr(e, "message", str(e)) or ""
+    if msg and msg.isascii():
+        return msg
+    code = getattr(e, "status", None)
+    return f"the step service failed (HTTP {code})" if code else "could not reach the step service"
 
 
 def _play_sound(name: str) -> float:

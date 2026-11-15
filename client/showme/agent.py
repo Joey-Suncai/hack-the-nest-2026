@@ -70,7 +70,7 @@ class AgentSession(QObject):
     agent_said = pyqtSignal(str)
     voice_event = pyqtSignal(str, object)  # ("duck" | "accept" | "reject", 分数)
     first_audio = pyqtSignal()  # 用户说完后，Agent 的第一段声音开始播放（计时用）
-    voice_start = pyqtSignal()  # Agent 开始说一段话（之前没在放声音）：[sync] 计时
+    voice_start = pyqtSignal(int)  # (drop_gen) Agent 开始说一段话（之前没在放声音）：[sync] 计时
 
     def __init__(self, tools: dict, lang: str = "en"):
         """tools：{"show_next_step": fn(params) -> str, "look_at_screen": fn(params) -> str}，在 SDK 线程里调用。"""
@@ -160,7 +160,7 @@ class AgentSession(QObject):
         self.failed.emit(f"disconnected ({getattr(details, 'reason', details)})")
 
     def send(self, text: str) -> bool:
-        """发一条用户消息（打字输入、[screen changed] 通知）。"""
+        """发一条用户消息（打字输入）。"""
         if not self.active:
             return False
         try:
@@ -169,6 +169,18 @@ class AgentSession(QObject):
             return True
         except Exception as e:  # noqa: BLE001
             print(f"[agent] 发送失败：{e}", flush=True)
+            return False
+
+    def context(self, text: str) -> bool:
+        """背景消息（contextual update）：告诉 Agent 用户进行到哪一步，它不会回复、不会念出来。"""
+        if not self.active:
+            return False
+        try:
+            self.conv.send_contextual_update(text)
+            print(f"[agent] → (context) {text!r}", flush=True)
+            return True
+        except Exception as e:  # noqa: BLE001
+            print(f"[agent] 背景消息发送失败：{e}", flush=True)
             return False
 
     def hush(self):

@@ -187,7 +187,13 @@ class FilteredAgentAudio(AudioInterface):
         self.sent_voice_sumsq = 0.0
         self.on_first_audio = None  # 计时：用户说完后 Agent 的第一段声音开始播放时回调（音频线程里）
         self.await_first_audio = False
-        self.on_voice_start = None  # Agent 开始说一段新的话（播放队列本来是空的）时回调（SDK 线程里）
+        self.on_voice_start = None  # (gen) Agent 开始说一段新的话（播放队列本来是空的）时回调（SDK 线程里）
+        # 两个声音不重叠：客户端开始念一步 → 清掉 Agent 正在放的声音，并丢掉它之后还在路上的声音，
+        # 直到用户下一次开口 / 打字（new_user_turn）。这段时间 Agent 本来就不该说话（SHOWN 之后最多一句 "Okay."）
+        self.drop_stale = False
+        self.drop_gen = 0  # 每次 drop_for_client +1：Agent 开口的回调带上它，晚到的回调不会误停新的一步
+        self._out_lock = threading.Lock()
+        self._dropped = 0
 
     # ---- SDK 要求的 4 个方法 ----
     def start(self, input_callback):
@@ -214,21 +220,55 @@ class FilteredAgentAudio(AudioInterface):
               f"ShowMe 没说话时发出的语音 {self.stats['accepted_while_quiet']} 段", flush=True)
 
     def output(self, audio: bytes):
-        if self.engine and not self.muted:
+        with self._out_lock:
+            if not self.engine or self.muted:
+                return
+            if self.drop_stale:
+                self._dropped += 1
+                if self._dropped == 1:
+                    print("[sync] agent audio dropped (client is reading a step; waiting for the user's next turn)", flush=True)
+                return
             if self.await_first_audio:
                 self.await_first_audio = False
                 if self.on_first_audio:
                     self.on_first_audio()
             if not self.engine.playing() and self.on_voice_start:
-                self.on_voice_start()
+                self.on_voice_start(self.drop_gen)
             self.engine.play(audio)
+
+    def drop_for_client(self):
+        """客户端要念一步了：清掉 Agent 正在放的，之后到的也丢掉，直到 new_user_turn()。"""
+        with self._out_lock:
+            self.drop_stale = True
+            self.drop_gen += 1
+            self._dropped = 0
+            if self.engine:
+                was = self.engine.playing()
+                self.engine.clear()
+                self.engine.set_volume(1.0)
+                if was:
+                    print("[sync] agent audio cleared (client step starts)", flush=True)
+
+    def new_user_turn(self):
+        """用户刚说完 / 打了字：Agent 接下来的回答要放出来。"""
+        with self._out_lock:
+            if self.drop_stale and self._dropped:
+                print(f"[sync] dropped {self._dropped} agent audio chunks since the last step", flush=True)
+            self.drop_stale = False
+            self.muted = False
+
+    def allow_agent(self):
+        """Agent 要说的话（tool 返回 DONE / UNSURE，它负责转告）：不再丢它的声音（静音状态不变）。"""
+        with self._out_lock:
+            self.drop_stale = False
 
     def silence_now(self):
         """Stop：立刻清空播放队列，并丢掉之后还在路上的声音。"""
-        self.muted = True
-        if self.engine:
-            self.engine.clear()
-            self.engine.set_volume(1.0)
+        with self._out_lock:
+            self.muted = True
+            if self.engine:
+                self.engine.clear()
+                self.engine.set_volume(1.0)
 
     def interrupt(self):
         if self.engine:
