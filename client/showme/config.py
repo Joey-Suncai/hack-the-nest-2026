@@ -35,6 +35,8 @@ API_TOKEN = os.getenv("SHOWME_TOKEN") or None
 
 # ---- Accessibility 控件：每次 /api/next-step 带上目标 App 能点的控件和精确框（ax_tree.py），SHOWME_AX=0 关掉 ----
 AX_ELEMENTS = os.getenv("SHOWME_AX", "1") == "1"
+# Agent 调 tool 时先念一句 "Let me look." / "One sec."；默认关（用户觉得多余），SHOWME_FILLER=1 打开
+FILLER = os.getenv("SHOWME_FILLER", "0") == "1"
 
 # ---- 截图 ----
 MAX_SIDE = 1280  # 发给后端的截图长边

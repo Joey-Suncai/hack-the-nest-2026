@@ -28,7 +28,7 @@ from PyQt6.QtWidgets import QApplication
 
 from showme import api, apps, ax_snap, ax_tree, capture, enroll, keycheck, ocr, reasoning, sync, wording
 from showme.change import ChangeDetector, _diff, ax_signature, fine_diff, mask_rects, screen_changed
-from showme.config import (AX_ELEMENTS, CHANGE_THRESHOLD, CLICK_EXTRA_PAD, CLICK_SETTLE_MAX_S, DEBUG_DETECT, HIGHLIGHT_PAD, KEYCHECK_INTERVAL_S, LOG, MIC_MAX_S, POLL_S,
+from showme.config import (AX_ELEMENTS, FILLER, CHANGE_THRESHOLD, CLICK_EXTRA_PAD, CLICK_SETTLE_MAX_S, DEBUG_DETECT, HIGHLIGHT_PAD, KEYCHECK_INTERVAL_S, LOG, MIC_MAX_S, POLL_S,
                            RECHECK_AFTER_S, RECHECK_MIN_GAP_S, SETTLE_MAX_S, SETTLE_MIN_S, SETTLE_NOCHANGE_MAX_S, SETTLE_POLL_S, TALK_MAX_S)
 from showme.coords import box_to_rect, expand, same_target
 from showme.i18n import t
@@ -1346,7 +1346,8 @@ class Controller(QObject):
             self.panel.set_status(t("live_off"))
 
     def _on_agent_connected(self, engine_name: str):
-        self.narrator.prefetch(list(FILLERS))  # 调 tool 时马上念的那两句：先生成好
+        if FILLER:
+            self.narrator.prefetch(list(FILLERS))  # 调 tool 时马上念的那两句：先生成好
         self.narrator.stop()  # 步骤由客户端念（不静音），对话由 Agent 说；两边不重叠见 _speak_step / _on_agent_voice_start
         self.panel.set_live_state(True)
         g = self.agent.gate
@@ -1423,7 +1424,7 @@ class Controller(QObject):
     def _filler(self):
         """主线程：Agent 一调用 tool 就念一句 "Let me look." / "One sec."（轮流），免得用户干等 4–6 秒。
         不丢 Agent 的声音（它的回答还在后面）；Agent 回答开始播放时，这句没念完就被 _on_agent_voice_start 停掉。"""
-        if self._talking or not self.panel.voice_enabled():
+        if not FILLER or self._talking or not self.panel.voice_enabled():
             return
         text = FILLERS[self._n_filler % len(FILLERS)]
         self._n_filler += 1

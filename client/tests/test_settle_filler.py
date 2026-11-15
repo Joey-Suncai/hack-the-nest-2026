@@ -119,7 +119,16 @@ def test_prefetched_phrase_plays_without_network(monkeypatch):
     assert n.current.done
 
 
+def test_filler_is_off_by_default():
+    said = []
+    c = types.SimpleNamespace(_talking=False, _n_filler=0, panel=types.SimpleNamespace(voice_enabled=lambda: True),
+                              narrator=types.SimpleNamespace(cached=lambda t: True, say=lambda t, interrupt=False, tag=None: said.append(t)))
+    types.MethodType(Controller._filler, c)()
+    assert said == []
+
+
 def test_filler_alternates_and_keeps_agent_audio(monkeypatch):
+    monkeypatch.setattr("showme.controller.FILLER", True)
     said = []
     audio = types.SimpleNamespace(drop_stale=False, drop_for_client=lambda: said.append("DROP"))
     c = types.SimpleNamespace(_talking=False, _n_filler=0, panel=types.SimpleNamespace(voice_enabled=lambda: True),
