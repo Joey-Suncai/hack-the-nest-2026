@@ -91,3 +91,28 @@ def test_build_prompt_includes_frontmost_app():
     body = NextStepIn(app="Numbers", goal="g", screenshot=TINY_PNG_B64, frontmost_app="Safari")
     p = steps.build_prompt(body)
     assert "Safari" in p and "{" not in p
+
+
+def _out(**kw):
+    base = dict(status="next", previous_ok=None, instruction="点图表", target_label="图表",
+                box=[10, 10, 50, 50], expect="出现菜单")
+    base.update(kw)
+    return NextStepOut(**base)
+
+
+def test_finalize_keeps_valid_next_guess():
+    g = steps.NextGuess(label=" 二维 ", instruction=" Click 2D. ", expect="styles appear")
+    out = finalize(_out(next_guess=g))
+    assert out.next_guess.label == "二维" and out.next_guess.instruction == "Click 2D."
+
+
+def test_finalize_drops_bad_next_guess():
+    assert finalize(_out(next_guess=steps.NextGuess(label=" ", instruction="x"))).next_guess is None
+    assert finalize(_out(status="done", box=None, next_guess=steps.NextGuess(label="a", instruction="b"))).next_guess is None
+    assert finalize(_out(box=None, next_guess=steps.NextGuess(label="a", instruction="b"))).next_guess is None  # → unsure
+
+
+def test_endpoint_returns_next_guess_key(client, monkeypatch):
+    monkeypatch.setattr(steps.gemini, "MOCK", True)
+    r = client.post("/api/next-step", json={"app": "a", "goal": "g", "screenshot": TINY_PNG_B64})
+    assert "next_guess" in r.json()

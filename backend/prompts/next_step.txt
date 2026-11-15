@@ -29,3 +29,8 @@
    - 简体中文：不超过 30 个字，如「点击顶部工具栏里的『图表』按钮」。
    - English: at most 15 words, one short sentence, natural spoken English, e.g. "Click the green Share button in the bottom toolbar." Name the element with its on-screen text and say where it is. No quotes, no markdown, no emoji.
 11. 界面语言可能和{lang_name}不一样（例如软件界面是中文、要求用 English 指导）。这时 instruction 和 expect 里**不要出现界面上的外语原文**（朗读声音读不了），改用{lang_name}说出按钮的意思，再加上位置、颜色或图标帮用户找到它，如 "Click the green Share Screen button at the bottom of the window."。target_label 仍然照抄界面原文。
+12. next_guess（用来提速，尽量给）：想一想用户点完这一步之后，屏幕上会出现什么，**再下一步**要点哪个元素。只要你大致知道这个软件接下来会出现什么（常见的菜单、下拉列表、对话框、确认按钮），而且那个元素上有文字，就填：
+   - label：那个元素上会显示的原文（客户端会在新截图里找这段文字，所以要写界面上真实会出现的字，不要翻译、不要加引号）
+   - instruction、expect：写法同上
+   例（TextEdit）：这一步是「点击菜单栏的『格式』」，点完会展开格式菜单，下一步多半是点「字体」→ label 填 字体，instruction 填 Click Font in the Format menu.，expect 填 The Font submenu opens.
+   完全猜不到、或者下一个元素是没有文字的纯图标时填 null；status 不是 "next" 时填 null。

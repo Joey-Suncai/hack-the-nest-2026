@@ -39,7 +39,7 @@ def _small(box):
 def test_refine_replaces_small_box(monkeypatch):
     calls = []
 
-    def fake(prompt, schema, files=None):
+    def fake(prompt, schema, files=None, **kw):
         calls.append(schema)
         if schema is NextStepOut:
             return _small([400, 400, 500, 500])
@@ -52,7 +52,7 @@ def test_refine_replaces_small_box(monkeypatch):
 
 
 def test_refine_failure_keeps_original(monkeypatch):
-    def fake(prompt, schema, files=None):
+    def fake(prompt, schema, files=None, **kw):
         if schema is NextStepOut:
             return _small([400, 400, 500, 500])
         raise steps.gemini.GeminiError("boom")
@@ -66,7 +66,7 @@ def test_refine_failure_keeps_original(monkeypatch):
 def test_big_box_skips_refine(monkeypatch):
     calls = []
 
-    def fake(prompt, schema, files=None):
+    def fake(prompt, schema, files=None, **kw):
         calls.append(schema)
         return _small([100, 100, 600, 600])
 
