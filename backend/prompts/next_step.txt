@@ -65,21 +65,25 @@ H. 目标说得含糊时，选最可能的那条具体做法，并且和目标�
    - instruction、expect：写法同上
    例（TextEdit）：这一步是「点击菜单栏的『格式』」，点完会展开格式菜单，下一步多半是点「字体」→ label 填 字体，instruction 填 Click Font in the Format menu.，expect 填 The Font submenu opens.
    完全猜不到、或者下一个要点的元素只有图标没有文字（比如 + 号、齿轮、铅笔图标）时，next_guess 填 null；status 不是 "next" 时填 null。
-13. check（关键指标，用来精确判断用户做完了**这一步**）：写出这一步做完之后屏幕上一定会成立的一件事，客户端会用辅助功能 / OCR 直接核对它。字段：kind、element_id、label、expect、box（没用到的字段填 null）。
+13. check（关键指标，所有软件通用，用来精确判断用户做完了**这一步**）：写出这一步做完之后屏幕上一定会成立的一件事。客户端每 1.5 秒用辅助功能 / OCR 核对一次，成立了就算这一步成功。字段：kind、element_id、label、expect、box（没用到的字段填 null）。
    - kind 只能是下面四种之一：
-     - "value_contains"：某个输入框 / 下拉框的值变成了某个内容。label 填那个控件的名字，expect 填值里应包含的文字（如 "11/16"、"14:00"）；只要求有内容（比如让用户自己打主题）时 expect 填 null。
-     - "appears"：出现了新的东西（窗口、菜单、弹出的日期选择器、按钮状态变化）。expect 填会出现的文字。
+     - "value_contains"：某个输入框 / 搜索框 / 下拉框的值变成了某个内容。label 填那个控件的名字，expect 填值里应包含的文字（如搜索词、"14:00"、"11/16"）；只要求有内容（比如让用户自己写标题）时 expect 填 null。
+     - "appears"：出现了新的东西（新窗口、新标签页、菜单、弹出框、侧边栏视图、按钮变成新状态）。expect 填会出现的文字。
      - "disappears"：某个东西消失了（对话框 / 弹窗 / 菜单关掉了）。expect 填会消失的那段文字（如对话框标题）。
-     - "selected"：复选框 / 开关 / 单选按钮 / 标签页被选中。label 填它的名字。
-   - 选**这一步一定会改变**的指标。指标常常不是要点的那个元素：点日期选择器里的日期，变化的是「开始日期」框里的值。
+     - "selected"：复选框 / 开关 / 单选按钮 / 分段按钮 / 标签页被选中。label 填它的名字。
+   - 选**这一步一定会改变**的指标。指标常常不是要点的那个元素：点日期选择器里的日期，变化的是日期框里的值；点「保存」，变化的是对话框消失了。
+   - 对照现在的截图检查：appears 的文字现在截图里**还没有**（已经看得到的侧边栏项、要点的按钮自己的名字都不行）；disappears 的文字现在**看得到**；value_contains 的 expect 现在**还不在**那个框里。做不到就填 null。
+   - 让用户输入具体内容的步骤（如 "Type cats into the search box and press Enter."）：用 value_contains，label 填那个框的名字，expect 填要输入的内容。
    - 指标在上面的控件列表里时：element_id 填它的编号，label 填它的名字（一字不差）。不在列表里时：element_id 填 null，label / expect 填截图上看得到（或会出现）的原文，box 填它在截图里的位置（[ymin, xmin, ymax, xmax]，0–1000，同 box 的写法）。
-   - 优先这样选：输入框 / 下拉框的值用 "value_contains"；关掉对话框 / 弹窗用 "disappears"；打开新窗口 / 菜单 / 出现新状态用 "appears"；复选框 / 开关 / 单选用 "selected"。
-   - 例：
-     - 「点日期选择器里的 11 月 16 日」→ kind "value_contains"，label "开始日期"，expect "11/16"
-     - 「点开始日期框」（会弹出日期选择器）→ kind "appears"，expect "十一月"（或日期选择器里某个控件的名字）
-     - 「点保存」→ kind "disappears"，expect "新建事件"（对话框关掉了）
-     - 「点 Follow」→ kind "appears"，expect "Following"
-     - 「勾选 Remember me」→ kind "selected"，label "Remember me"
-     - 「在主题框里输入会议名」→ kind "value_contains"，label "Subject"，expect null（有内容就行）
+   - 优先这样选：输入框 / 下拉框的值用 "value_contains"；关掉对话框 / 弹窗用 "disappears"；打开新窗口 / 菜单 / 视图、出现新状态用 "appears"；复选框 / 开关 / 单选用 "selected"。
+   - 例（不同软件）：
+     - VS Code「点左边的资源管理器图标」→ kind "appears"，expect "EXPLORER"；「点文件 main.py」→ kind "appears"，expect "main.py"（标签栏里出现这个文件名，前提是现在还没打开）
+     - Gmail「点 Compose」→ kind "appears"，expect "New Message"（写邮件窗口）
+     - Chrome「点标签栏的 +」→ kind "appears"，expect "New Tab"；「在搜索框输入 cats 并回车」→ kind "value_contains"，label "Search"，expect "cats"
+     - 系统设置「打开 Wi-Fi 开关」→ kind "selected"，label "Wi-Fi"
+     - Spotify「点 Follow」→ kind "appears"，expect "Following"
+     - 任何对话框「点保存」→ kind "disappears"，expect 对话框的标题（如 "Save As"）
+     - 日期选择器「点 16 日」→ kind "value_contains"，label 日期框的名字，expect "16"
+     - 表单「在标题框里写一个名字」→ kind "value_contains"，label "Title"，expect null（有内容就行）
    - label / expect 保持界面原文，不翻译（客户端要逐字匹配）。
-   - 没把握、或者这一步之后没有能看出来的变化时，check 填 null。**宁可填 null 也不要乱填**：错的指标比没有更糟。status 不是 "next" 时 check 填 null。
+   - 没把握、或者这一步之后没有能看出来的变化时（比如只是滚动列表、只是点一下让输入框获得焦点），check 填 null。**宁可填 null 也不要乱填**：错的指标会让客户端误判成功。status 不是 "next" 时 check 填 null。

@@ -93,6 +93,7 @@
     ```
     指标常常不是要点的那个元素。例：「点日期选择器里的 11 月 16 日」→ `{"kind": "value_contains", "label": "开始日期", "expect": "11/16"}`；「点开始日期框」（弹出选择器）→ `{"kind": "appears", "expect": "十一月"}`；「点保存」→ `{"kind": "disappears", "expect": "新建事件"}`；「点 Follow」→ `{"kind": "appears", "expect": "Following"}`；「勾选 Remember me」→ `{"kind": "selected", "label": "Remember me"}`；「输入主题」→ `{"kind": "value_contains", "label": "Subject", "expect": null}`。
     后端清洗：`kind` 不认识 → `check = null`；`element_id` 不在请求的 `elements` 里 → `element_id = null`（保留 `label`）；`element_id` 有效时，没给 `label` / `box` 就用那个控件的 `name` / `box` 补上；`box` 同样取整 / 修正顺序 / 裁到 0–1000，无效 → `null`；字符串去首尾空白，空 → `null`；`value_contains` / `appears` / `disappears` 至少要有 `label` 或 `expect` 之一，`selected` 必须有 `label`，否则 `check = null`；`status` 不是 `"next"` 时一定是 `null`。
+    这是所有软件通用的规则（编辑器、浏览器 / 网页应用、系统设置、媒体 App、对话框），不是某个 App 的特例。客户端每 1.5 秒核对一次，成立了就算用户这一步成功。
     用法：`null` 或客户端核对不了时，退回原来的判断（点在框里 + 画面有变化）。模型没把握时会给 `null`（错的指标比没有更糟）
   - `situation`（`str | null`）：一句话，屏幕上现在是什么情况，用 `lang`（如 "Chrome opened the Google sign-in page; Gmail is not signed in."）
   - `reasoning`（`str | null`）：1–2 句短话，情况和目标的关系 / 为什么是这一步，用 `lang`（如 "Gmail needs you to sign in first; this is part of the task, not a wrong page."）。客户端可以发给 Agent：`[step] ... Situation: … Why: …`，用户问「为什么」时 Agent 用它回答
