@@ -7,6 +7,9 @@ labels.json：[{"file": "x.png", "app": "...", "goal": "...", "history": ["已�
   可选 "app_en" / "goal_en" / "history_en"：--lang en 时用英文的目标和历史（模拟客户端发英文）
   可选 "expect" / "guide" / "elements" / "confirmed" / "app_switched_from" / "deep"：原样放进请求（真实日志的 case）
   可选 "avoid_label"：字符串或列表，target_label 含有其中任何一个就算错
+  可选 "expect_check"：{"kind": "value_contains" 或列表, "label_contains": "开始时间"}：返回的 check 的 kind 对得上、
+    并且 label 或 expect 里包含 label_contains（不区分大小写，不写就不查），才算 check 对（单独统计，不影响命中率）。
+    kind 列表里写 null 表示这一步返回 check = null 也算对（比如只是滚动列表）
 运行：cd backend && uv run python eval/eval_boxes.py [文件名关键字] [--lang en|zh]
   --lang 强制所有 case 用这个语言（不写就用每个 case 自己的 lang，默认 zh）
 """
@@ -72,6 +75,8 @@ def main():
     by_group: dict[str, list] = {}
     guess_given, guess_ok, guess_checked = 0, 0, 0
     deep_rows: list = []
+    next_n, check_given, check_ok, check_labelled = 0, 0, 0, 0
+    by_app: dict[str, list[int]] = {}
     for c in cases:
         b64, size = to_jpeg_b64(CASES / c["file"])
         want_status = c.get("expect_status")  # "done" / "unsure" / None（要框）
@@ -145,6 +150,32 @@ def main():
                 print(f"     situation: {out.situation} | reasoning: {out.reasoning} | app: {out.app}")
             if out.plan:
                 print(f"     plan: {out.plan}")
+            row = by_app.setdefault(c["app"], [0, 0, 0, 0])  # [next 数, 有 check, 有标准答案, 对了]
+            if out.status == "next":
+                next_n += 1
+                check_given += out.check is not None  # finalize 之后还在的 check 就是合法的
+                row[0] += 1
+                row[1] += out.check is not None
+            ck = out.check
+            line = (f"{ck.kind} element_id={ck.element_id} label={ck.label!r} expect={ck.expect!r} box={ck.box}"
+                    if ck else "null")
+            want = c.get("expect_check")
+            if want:
+                check_labelled += 1
+                kinds = want["kind"] if isinstance(want["kind"], list) else [want["kind"]]
+                sub = (want.get("label_contains") or "").lower()
+                if ck is None:
+                    ok = None in kinds  # 列表里写了 null：这一步给 null 也算对（比如只是滚动列表）
+                else:
+                    ok = ck.kind in kinds and (not sub or sub in (ck.label or "").lower()
+                                               or sub in (ck.expect or "").lower())
+                check_ok += ok
+                row[2] += 1
+                row[3] += ok
+                line +=" (check ✅)" if ok else f" (check ❌ 应为 {want})"
+            print(f"     check: {line}")
+        elif c.get("expect_check"):
+            check_labelled += 1
     n = len(cases)
     if n:
         miou = sum(ious) / len(ious) if ious else 0
@@ -152,6 +183,10 @@ def main():
               f"平均 IoU {miou:.2f}，平均耗时 {sum(times) / n:.1f}s，最慢 {max(times):.1f}s"
               + (f"，英文指令混入中文 {cjk_bad} 条" if a.lang == "en" or cjk_bad else ""))
         print(f"  next_guess：给出 {guess_given}/{n} 次" + (f"；有标准答案的 {guess_checked} 张里猜对 {guess_ok} 张" if guess_checked else ""))
+        print(f"  check：status=next 的 {next_n} 个回答里有合法 check 的 {check_given} 个"
+              + (f"；有标准答案的 {check_labelled} 张里对了 {check_ok} 张" if check_labelled else ""))
+        for app_name, (nn, given, lab, good) in sorted(by_app.items()):
+            print(f"    check · {app_name}：next {nn} 个里有 check {given} 个" + (f"，标准答案 {good}/{lab}" if lab else ""))
         if stage["gemini"]:
             avg = {k: sum(v) / len(v) for k, v in stage.items()}
             print(f"  阶段平均：解码+prompt {avg['prep']:.0f}ms · Gemini {avg['gemini']:.0f}ms · 修框 {avg['post']:.0f}ms"
