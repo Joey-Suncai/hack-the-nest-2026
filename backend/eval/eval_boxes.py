@@ -12,6 +12,7 @@ import argparse
 import base64
 import io
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -23,6 +24,7 @@ from PIL import Image  # noqa: E402
 from app import gemini, steps  # noqa: E402
 
 CASES = Path(__file__).parent / "cases"
+CJK = re.compile(r"[\u3400-\u9fff\u3000-\u303f\uff00-\uffef]")
 
 
 def to_jpeg_b64(path: Path, long_edge: int = 1280) -> tuple[str, tuple[int, int]]:
@@ -60,7 +62,7 @@ def main():
     ap.add_argument("--lang", choices=["zh", "en"], help="强制所有 case 用这个语言")
     a = ap.parse_args()
     cases = [c for c in json.loads((CASES / "labels.json").read_text()) if a.key in c["file"]]
-    hits, times, ious = 0, [], []
+    hits, times, ious, cjk_bad = 0, [], [], 0
     for c in cases:
         b64, size = to_jpeg_b64(CASES / c["file"])
         want_status = c.get("expect_status")  # "done" / "unsure" / None（要框）
@@ -96,12 +98,15 @@ def main():
         if out:
             words = len(out.instruction.split()) if lang == "en" else len(out.instruction)
             unit = "words" if lang == "en" else "字"
-            print(f"     → 「{out.instruction}」（{words} {unit}）")
+            mixed = lang == "en" and bool(CJK.search(out.instruction))
+            cjk_bad += mixed
+            print(f"     → 「{out.instruction}」（{words} {unit}）{'  ⚠️ 英文指令里有中文，声音读不了' if mixed else ''}")
     n = len(cases)
     if n:
         miou = sum(ious) / len(ious) if ious else 0
         print(f"\n[lang={a.lang or '按 case'}] 模型 {gemini.MODEL}（两步定位 {'开' if steps.REFINE else '关'}）：命中率 {hits}/{n} = {hits / n:.0%}，"
-              f"平均 IoU {miou:.2f}，平均耗时 {sum(times) / n:.1f}s，最慢 {max(times):.1f}s")
+              f"平均 IoU {miou:.2f}，平均耗时 {sum(times) / n:.1f}s，最慢 {max(times):.1f}s"
+              + (f"，英文指令混入中文 {cjk_bad} 条" if a.lang == "en" or cjk_bad else ""))
 
 
 if __name__ == "__main__":

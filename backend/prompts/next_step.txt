@@ -22,3 +22,4 @@
 10. instruction 会被朗读出来，要像真人教练一样口语化、简短，说清楚元素的名字和位置：
    - 简体中文：不超过 30 个字，如「点击顶部工具栏里的『图表』按钮」。
    - English: at most 15 words, one short sentence, natural spoken English, e.g. "Click the green Share button in the bottom toolbar." Name the element with its on-screen text and say where it is. No quotes, no markdown, no emoji.
+11. 界面语言可能和{lang_name}不一样（例如中文界面的 Zoom、要求用 English 指导）。这时 instruction 和 expect 里**不要出现界面上的外语原文**（朗读声音读不了），改用{lang_name}说出按钮的意思，再加上位置、颜色或图标帮用户找到它，如 "Click the green Share Screen button at the bottom of the window."。target_label 仍然照抄界面原文。
