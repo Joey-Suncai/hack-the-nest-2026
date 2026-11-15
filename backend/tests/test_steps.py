@@ -309,3 +309,89 @@ def test_mock_fills_reasoning_fields(client, monkeypatch):
     done = client.post("/api/next-step", json={"app": "a", "goal": "g", "screenshot": TINY_PNG_B64,
                                                "history": [{"instruction": "x", "ok": True}] * 3}).json()
     assert done["status"] == "done" and done["plan"] is None
+
+
+# ---------- check：这一步做完后的关键指标 ----------
+def _chk(**kw):
+    return steps.Check(**kw)
+
+
+def test_check_parses_and_defaults_to_none():
+    out = NextStepOut.model_validate({
+        "status": "next", "previous_ok": None, "instruction": "x", "target_label": "y", "box": [1, 2, 3, 4],
+        "expect": None, "check": {"kind": "value_contains", "element_id": 15, "label": "开始日期",
+                                  "expect": "11/16", "box": None}})
+    assert out.check.kind == "value_contains" and out.check.element_id == 15 and out.check.expect == "11/16"
+    assert _out().check is None and finalize(_out()).check is None
+    fields = list(NextStepOut.model_fields)
+    assert fields.index("check") > fields.index("expect") > fields.index("instruction")
+
+
+def test_check_unknown_kind_dropped():
+    assert finalize(_out(check=_chk(kind="changed", label="New Tab"))).check is None
+    assert finalize(_out(check=_chk(kind=" Appears ", expect="Following"))).check.kind == "appears"
+
+
+def test_check_unknown_element_id_keeps_label():
+    c = finalize(_out(check=_chk(kind="value_contains", element_id=99, label=" 开始日期 ", expect=" 11/16 ")),
+                 "zh", _els()).check
+    assert c.element_id is None and c.label == "开始日期" and c.expect == "11/16"
+    assert finalize(_out(check=_chk(kind="selected", element_id=12, label="x"))).check.element_id is None  # 无 elements
+
+
+def test_check_valid_element_fills_label_and_box():
+    c = finalize(_out(check=_chk(kind="value_contains", element_id=12)), "en", _els()).check
+    assert c.element_id == 12 and c.label == "New Tab" and c.box == [40, 950, 62, 966] and c.expect is None
+    c = finalize(_out(check=_chk(kind="value_contains", element_id=12, label="Tab name", box=[5, 5, 9, 9])),
+                 "en", _els()).check
+    assert c.label == "Tab name" and c.box == [5, 5, 9, 9]  # 模型给了就保留
+
+
+def test_check_box_normalized():
+    assert finalize(_out(check=_chk(kind="appears", expect="x", box=[600, 100, 500, 1200]))).check.box == \
+        [500, 100, 600, 1000]
+    assert finalize(_out(check=_chk(kind="appears", expect="x", box=[1, 2, 3]))).check.box is None
+
+
+def test_check_requires_label_or_expect():
+    for kind in ("value_contains", "appears", "disappears"):
+        assert finalize(_out(check=_chk(kind=kind, label=" ", expect=""))).check is None
+        assert finalize(_out(check=_chk(kind=kind, expect="Following"))).check is not None
+        assert finalize(_out(check=_chk(kind=kind, label="Subject"))).check is not None
+    assert finalize(_out(check=_chk(kind="selected", expect="Remember me"))).check is None
+    assert finalize(_out(check=_chk(kind="selected", label="Remember me"))).check.label == "Remember me"
+    assert finalize(_out(check=_chk(kind="selected", element_id=13)), "en", _els()).check is None  # 无名控件补不出 label
+
+
+def test_check_dropped_when_not_next():
+    c = _chk(kind="appears", expect="Following")
+    assert finalize(_out(status="done", box=None, check=c)).check is None
+    assert finalize(_out(box=None, check=c)).check is None  # next 没框 → unsure
+
+
+def test_next_step_keeps_check_element_on_own_box(monkeypatch):
+    monkeypatch.setattr(steps.gemini, "generate_json", lambda *a, **k: _out(
+        box=[10, 10, 20, 20], check=_chk(kind="value_contains", element_id=12, expect="x")))
+    out = steps.next_step(NextStepIn(app="a", goal="g", screenshot=TINY_PNG_B64, elements=ELEMENTS))
+    assert out.element_id is None and out.check.element_id == 12 and out.check.label == "New Tab"
+
+
+def test_mock_returns_check(client, monkeypatch):
+    out = mock_next_step(NextStepIn(app="a", goal="g", screenshot=TINY_PNG_B64, elements=ELEMENTS))
+    assert out.check.kind == "value_contains" and out.check.element_id == 12 and out.check.label == "New Tab"
+    assert out.check.expect is None
+    monkeypatch.setattr(steps.gemini, "MOCK", True)
+    j = client.post("/api/next-step", json={"app": "a", "goal": "g", "screenshot": TINY_PNG_B64,
+                                            "elements": ELEMENTS}).json()
+    assert j["check"] == {"kind": "value_contains", "element_id": 12, "label": "New Tab", "expect": None,
+                          "box": [40, 950, 62, 966]}
+    j = client.post("/api/next-step", json={"app": "a", "goal": "g", "screenshot": TINY_PNG_B64}).json()
+    assert "check" in j and j["check"] is None
+
+
+def test_prompt_mentions_check():
+    p = steps.build_prompt(NextStepIn(app="a", goal="g", screenshot=TINY_PNG_B64))
+    assert "check" in p and "value_contains" in p and "disappears" in p and "selected" in p
+    assert "{" not in p
+    p = steps.build_prompt(NextStepIn(app="a", goal="g", screenshot=TINY_PNG_B64, elements=ELEMENTS))
+    assert "check 的指标控件如果在列表里" in p
