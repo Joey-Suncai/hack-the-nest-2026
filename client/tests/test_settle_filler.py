@@ -173,7 +173,7 @@ def _signals(monkeypatch, kind, inputs_ok=True, fired=True):
     c._step_completed = lambda reason, detail=None: done.append(reason)
     c._down = None
     for name in ("_on_click", "_on_mouse_down", "_on_mouse_up", "_click_completes", "_on_key", "_on_poll",
-                 "_screen_only_backup"):
+                 "_screen_only_backup", "_cancel_recheck"):
         setattr(c, name, types.MethodType(getattr(Controller, name), c))
     return c, done
 
@@ -384,3 +384,66 @@ def test_click_elsewhere_during_ocr_box_keeps_waiting_for_gemini(monkeypatch):
     c._token = 5
     c._on_click(600, 900)
     assert done == [] and c._token == 5 and c._provisional is not None
+
+
+# ---------------- 复查：截早了就用最新画面重新问 ----------------
+def _recheck_ctl(monkeypatch, frames):
+    """frames：复查时截到的缩略图灰度值；请求那张固定是 0。"""
+    shots = iter(frames)
+    monkeypatch.setattr(capture, "grab", lambda: next(shots))
+    monkeypatch.setattr(capture, "to_small_gray", lambda img: np.full((64, 64), 0.0 if img == "req" else img, np.float32))
+    monkeypatch.setattr(ctl.apps, "frontmost_app", lambda: "Zoom")
+    timers = []
+    monkeypatch.setattr(ctl.QTimer, "singleShot", staticmethod(lambda ms, fn: timers.append((ms, fn))))
+    requests, log = [], []
+    c = types.SimpleNamespace(task={"app": "Zoom", "goal": "x"}, state=ctl.REQUESTING, _token=3, history=[1, 2],
+                              _step_done=False, _provisional={"box": [1, 2, 3, 4]}, expect="new", _confirmed=None,
+                              _done_mono=ctl.time.monotonic(), _grow_masks=lambda: False, _masked=lambda raw: raw,
+                              overlay=types.SimpleNamespace(clear=lambda: log.append("clear")),
+                              narrator=types.SimpleNamespace(stop=lambda: log.append("hush")))
+    c._request = lambda img=None, front=None: requests.append((img, front, c._confirmed, c.expect))
+    for name in ("_schedule_recheck", "_cancel_recheck", "_recheck_tick"):
+        setattr(c, name, types.MethodType(getattr(Controller, name), c))
+    return c, timers, requests, log
+
+
+def test_recheck_fires_about_1_5s_after_the_action(monkeypatch):
+    c, timers, requests, _ = _recheck_ctl(monkeypatch, [])
+    c._schedule_recheck("req", {"kind": "click", "target": "Save"}, "old")
+    (ms, _fn), = timers
+    assert abs(ms - ctl.RECHECK_AFTER_S * 1000) < 100
+
+
+def test_recheck_no_change_keeps_result(monkeypatch, capsys):
+    c, timers, requests, _ = _recheck_ctl(monkeypatch, [0.0])
+    c._schedule_recheck("req", None, "old")
+    timers[0][1]()
+    assert requests == [] and c._token == 3 and "画面没变" in capsys.readouterr().out
+
+
+def test_recheck_change_while_requesting_asks_again_with_latest_screen(monkeypatch):
+    c, timers, requests, log = _recheck_ctl(monkeypatch, [0.6])
+    conf = {"kind": "click", "target": "Save"}
+    c._schedule_recheck("req", conf, "old")
+    timers[0][1]()
+    assert c._token == 4 and c._provisional is None and log == []  # 旧结果作废；还没显示，不用撤
+    assert requests == [(0.6, "Zoom", conf, "old")]  # 最新画面、照样带 confirmed、用请求时的 expect
+
+
+def test_recheck_change_after_result_shown_withdraws_it(monkeypatch):
+    c, timers, requests, log = _recheck_ctl(monkeypatch, [0.6])
+    c._schedule_recheck("req", None, "old")
+    c.state = ctl.WAITING  # 按旧画面算的下一步已经显示了
+    timers[0][1]()
+    assert log == ["clear", "hush"] and len(requests) == 1
+
+
+def test_recheck_cancelled_by_new_user_action_or_next_step(monkeypatch):
+    c, timers, requests, _ = _recheck_ctl(monkeypatch, [0.6, 0.6])
+    c._schedule_recheck("req", None, "old")
+    c._cancel_recheck()  # 用户又点 / 按键了
+    timers[0][1]()
+    c._schedule_recheck("req", None, "old")
+    c.history.append(3)  # 已经进到下一步
+    timers[1][1]()
+    assert requests == []

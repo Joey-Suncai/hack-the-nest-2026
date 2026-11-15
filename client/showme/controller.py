@@ -28,7 +28,7 @@ from PyQt6.QtWidgets import QApplication
 from showme import api, apps, ax_snap, ax_tree, capture, enroll, ocr, reasoning, sync, wording
 from showme.change import ChangeDetector, _diff, mask_rects
 from showme.config import (AX_ELEMENTS, CHANGE_THRESHOLD, CLICK_EXTRA_PAD, CLICK_SETTLE_MAX_S, DEBUG_DETECT, HIGHLIGHT_PAD, LOG, MIC_MAX_S, POLL_S,
-                           SETTLE_MAX_S, SETTLE_MIN_S, SETTLE_NOCHANGE_MAX_S, SETTLE_POLL_S, TALK_MAX_S)
+                           RECHECK_AFTER_S, RECHECK_MIN_GAP_S, SETTLE_MAX_S, SETTLE_MIN_S, SETTLE_NOCHANGE_MAX_S, SETTLE_POLL_S, TALK_MAX_S)
 from showme.coords import box_to_rect, expand, same_target
 from showme.i18n import t
 from showme.agent import AgentSession, MainThread
@@ -779,6 +779,7 @@ class Controller(QObject):
         self._step_done = True
         self._step_reason = reason
         self._t_change = time.perf_counter()
+        self._done_mono = time.monotonic()  # 用户做完的时刻（点击 = 松开）：复查从这里算 RECHECK_AFTER_S
         print(f"[step] 完成（{reason}{'/' + detail if detail else ''}）：{self.last_instruction!r}", flush=True)
         # 点在框里 / 打完字点别处或按 Tab / 回车：客户端确认做完了 → 下一次请求带 confirmed，后端不会因为画面没怎么变就让再做一遍
         self._confirmed = reasoning.confirmed(reason, (getattr(self, "current", None) or {}).get("target_label"))
@@ -832,6 +833,7 @@ class Controller(QObject):
     def _on_mouse_down(self, x: float, y: float):
         """全局左键按下（用户点的是别的 App）：记下位置和当时的框，框马上藏起来。
         OCR 秒出的框在 Gemini 核对回来之前也能点。"""
+        self._cancel_recheck()  # 用户又点了：之后的画面变化是这次点击造成的
         self._down = None
         prov = self.state == REQUESTING and self._provisional is not None
         if (self.state != WAITING and not prov) or self._step_done or self.overlay._rect is None:
@@ -894,6 +896,7 @@ class Controller(QObject):
     def _on_key(self, is_return: bool, is_tab: bool = False):
         """全局按键：只看是不是回车 / Tab，不记内容。打字步骤：回车 = enter，打过字再按 Tab = typing，
         其它键只计数；快捷键步骤有按键就算。"""
+        self._cancel_recheck()  # 用户在打字：之后的画面变化是打字造成的
         prov = self.state == REQUESTING and self._provisional is not None and self.overlay._rect is not None
         if (self.state != WAITING and not prov) or self._step_done:
             return
@@ -933,7 +936,10 @@ class Controller(QObject):
         except Exception as e:  # noqa: BLE001
             self._on_error(api.ApiError(t("capture_failed", e=e)))
             return
+        confirmed = self._confirmed  # _request 会取走它；复查重问时要再带上
+        expect = self.expect
         self._request(img=img, front=front)  # Gemini 照常核对
+        self._schedule_recheck(img, confirmed, expect)
         if not label:
             return
         instr = guess.get("instruction") or t("click_label", label=label)
@@ -960,6 +966,48 @@ class Controller(QObject):
             return (box, (time.perf_counter() - t) * 1000) if box else ocr.locate(img, label, near=near)
 
         self._bg_free(locate, found, lambda e: print(f"[ocr] {_msg(e)}", flush=True))
+
+    # ================= 复查：截早了就用最新画面重新问 =================
+    def _schedule_recheck(self, img, confirmed, expect):
+        """用户做完一步、正式截图发出去之后：从用户做完那一刻算 RECHECK_AFTER_S 秒（至少截图后 RECHECK_MIN_GAP_S 秒）
+        再截一张缩略图。软件响应得慢、第一张截早了 → _recheck_tick 用最新画面重新问。"""
+        now = time.monotonic()
+        done = getattr(self, "_done_mono", None) or now
+        delay = max(RECHECK_AFTER_S - (now - done), RECHECK_MIN_GAP_S)
+        rc = {"img": img, "token": self._token, "hist": len(self.history), "confirmed": confirmed, "expect": expect}
+        self._recheck = rc
+        QTimer.singleShot(int(delay * 1000), lambda: self._recheck_tick(rc))
+
+    def _cancel_recheck(self):
+        """用户又点了 / 按了键 / 说了话：之后画面的变化是新的操作造成的，不复查。"""
+        self._recheck = None
+
+    def _recheck_tick(self, rc):
+        if getattr(self, "_recheck", None) is not rc:
+            return  # 已经作废（用户又操作了 / 换了一步）
+        self._recheck = None
+        if self.task is None or self.state not in (REQUESTING, WAITING) or self._token != rc["token"] \
+                or len(self.history) != rc["hist"] or getattr(self, "_step_done", False):
+            return  # 停止了、用户说了话、已经进到下一步，或者用户已经在做下一步
+        try:
+            now = capture.grab()
+            self._grow_masks()
+            d = _diff(self._masked(capture.to_small_gray(now)), self._masked(capture.to_small_gray(rc["img"])))
+        except Exception as e:  # noqa: BLE001  复查失败不影响主流程
+            dbg(f"[recheck] 截图失败：{e}")
+            return
+        if d <= CHANGE_THRESHOLD:
+            print(f"[recheck] {RECHECK_AFTER_S:.1f} s 后画面没变（diff={d:.4f}）：刚才那张就是最新的", flush=True)
+            return
+        print(f"[recheck] 截图之后画面又变了（diff={d:.4f}）：第一张截早了 → 用最新画面重新问", flush=True)
+        self._token += 1  # 丢掉按旧画面算的结果（还没回来的那个）
+        self._provisional = None
+        if self.state == WAITING:  # 旧结果已经显示了：撤掉它
+            self.overlay.clear()
+            self.narrator.stop()
+        self.expect = rc["expect"]
+        self._confirmed = rc["confirmed"]  # 用户确实做了上一步：重问时照样告诉后端
+        self._request(img=now, front=apps.frontmost_app())
 
     def _fetch_guide(self):
         """后端用官方文档生成步骤大纲。没有这个接口 / 失败都没关系。"""

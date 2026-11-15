@@ -58,6 +58,10 @@ SETTLE_MAX_S = 1.5  # 画面开始变之后最多再等多久（动画 / 视频�
 SETTLE_NOCHANGE_MAX_S = 5.0
 # 点在框里（或打完字再点别处 / 按 Tab）= 客户端确认做完了：画面没变最多只等这么久（不等 5 秒），请求里带 confirmed
 CLICK_SETTLE_MAX_S = 0.8
+# 复查：用户做完一步后这么多秒，固定再截一张缩略图，和发给 Gemini 的那张比。变了（软件响应得慢，
+# 第一张截早了）→ 用最新画面重新问一次。期间用户又点 / 按键 / 说话就不复查。每步最多一次
+RECHECK_AFTER_S = 1.5
+RECHECK_MIN_GAP_S = 0.4  # 正式截图之后至少再过这么久才复查
 NEAR_CLICK_PT = 40  # 点在框外但离框不超过这么多逻辑点：也算完成（框画偏了；点错了下一步 Gemini 会纠正）
 HIGHLIGHT_COLOR = "#FF2D78"  # 框和光晕的颜色
 BORDER_WIDTH = 4  # 实线边框粗细
