@@ -3,6 +3,9 @@
 加新接口：照着下面 /api/generate 抄一个，然后同步更新 docs/API.md。
 """
 
+import hmac
+import os
+
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +24,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ---------- 口令：.env 里设了 SHOWME_TOKEN，就要求请求头 X-ShowMe-Token 一致（/api/health 除外）----------
+OPEN_PATHS = {"/api/health", "/docs", "/openapi.json"}
+
+
+@app.middleware("http")
+async def _check_token(request: Request, call_next):
+    token = os.getenv("SHOWME_TOKEN", "").strip()
+    if token and request.method != "OPTIONS" and request.url.path not in OPEN_PATHS:
+        given = request.headers.get("x-showme-token", "")
+        if not hmac.compare_digest(given.encode(), token.encode()):
+            return JSONResponse({"error": "口令不对：请设置和后端一样的 SHOWME_TOKEN"}, status_code=401)
+    return await call_next(request)
 
 
 # ---------- 统一错误格式：{"error": "..."} ----------
