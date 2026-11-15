@@ -1,11 +1,11 @@
-"""界面文字（中 / 英）。面板右上角的下拉框决定当前语言，默认 English（demo 用英文 Zoom + 英文声音）。"""
+"""界面文字（中 / 英）。面板右上角的下拉框决定当前语言，默认 English（demo 全英文：VS Code + 英文声音）。"""
 
 DEFAULT_LANG = "en"
 
 TEXT = {
     "en": {
-        "app_ph": "App, e.g. Zoom",
-        "goal_ph": "What do you want to do? e.g. start a new meeting",
+        "app_ph": "App, e.g. VS Code",
+        "goal_ph": "What do you want to do? e.g. clone a GitHub repo",
         "voice": "Voice",
         "start": "Start",
         "stop": "Stop",
@@ -24,11 +24,12 @@ TEXT = {
         "err_timeout": "The server took too long. Press Retry",
         "err_connect": "Can't reach the server. Run make backend first",
         "err_http": "Server error (HTTP {code})",
+        "err_generic": "Something went wrong — please try again.",
         "current_app": "the current app",
     },
     "zh": {
-        "app_ph": "软件，比如 Zoom",
-        "goal_ph": "你想做什么，比如 新建一个会议",
+        "app_ph": "软件，比如 VS Code",
+        "goal_ph": "你想做什么，比如 从 GitHub clone 一个 repo",
         "voice": "语音",
         "start": "开始",
         "stop": "停止",
@@ -47,6 +48,7 @@ TEXT = {
         "err_timeout": "后端响应超时，请点「重试」",
         "err_connect": "连不上后端，请先运行 make backend",
         "err_http": "后端出错了（HTTP {code}）",
+        "err_generic": "出错了，请再试一次",
         "current_app": "当前软件",
     },
 }

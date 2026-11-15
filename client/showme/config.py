@@ -2,6 +2,13 @@
 
 import os
 
+# ---- Demo 默认值（面板打开时预先填好）----
+DEMO_APP = "VS Code"
+DEMO_GOAL = "Clone the GitHub repo https://github.com/octocat/Hello-World"
+
+# ---- 调试记录：SHOWME_LOG=1 时，每一步的截图和后端返回存到 client/logs/<时间>/ ----
+LOG = os.getenv("SHOWME_LOG") == "1"
+
 # ---- 后端 ----
 API_BASE = os.getenv("SHOWME_API", "http://localhost:8000")
 

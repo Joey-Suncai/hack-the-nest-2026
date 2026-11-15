@@ -9,7 +9,10 @@ WAITING: 每 POLL_S 秒截图（不隐藏高亮层，遮掉框和面板）→ �
 stop：任何状态 → 清框 → IDLE
 """
 
+import json
+import time
 import traceback
+from pathlib import Path
 
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication
@@ -17,7 +20,7 @@ from PyQt6.QtWidgets import QApplication
 from showme import api, capture, wording
 from showme.i18n import t
 from showme.change import ChangeDetector, mask_rects
-from showme.config import HIGHLIGHT_PAD, POLL_S
+from showme.config import HIGHLIGHT_PAD, LOG, POLL_S
 from showme.coords import box_to_rect, expand
 from showme.narrator import Narrator
 
@@ -71,6 +74,12 @@ class Controller(QObject):
         self.expect = None
         self.guide = None
         self.last_instruction = None
+        self._log_dir = None
+        self._n_req = 0
+        if LOG:
+            self._log_dir = Path(__file__).resolve().parent.parent / "logs" / time.strftime("%Y%m%d-%H%M%S")
+            self._log_dir.mkdir(parents=True, exist_ok=True)
+            print(f"[log] 每一步的截图和后端返回存到 {self._log_dir}", flush=True)
         self.panel.set_running(True)
         self.narrator.say(wording.intro(app, goal, self.lang))
         self._fetch_guide()
@@ -121,6 +130,8 @@ class Controller(QObject):
         with self.overlay.hidden():
             img = capture.grab()
         self._img = img
+        self._n_req += 1
+        self._t_req = time.time()
         payload = {
             "app": self.app,
             "goal": self.goal,
@@ -135,6 +146,20 @@ class Controller(QObject):
 
         self._bg(call, self._on_result, self._on_error)
 
+    def _log(self, r: dict, rect):
+        """SHOWME_LOG=1：存发给后端的截图 + 返回 + 换算后的框，方便联调复盘。"""
+        if not self._log_dir:
+            return
+        try:
+            k = f"{self._n_req:02d}"
+            self._img.convert("RGB").save(self._log_dir / f"{k}_screen.jpg", quality=80)
+            rec = {"request": self._n_req, "seconds": round(time.time() - self._t_req, 2),
+                   "history": self.history[-10:], "response": r, "rect_logical_xywh": rect}
+            (self._log_dir / f"{k}_result.json").write_text(json.dumps(rec, ensure_ascii=False, indent=2))
+            print(f"[log] #{k} {rec['seconds']}s {r.get('status')} box={r.get('box')} rect={rect} | {r.get('instruction')}", flush=True)
+        except Exception as e:  # noqa: BLE001  记录失败不影响主流程
+            print(f"[log] 记录失败：{e}")
+
     def _on_result(self, r: dict):
         if self.history and r.get("previous_ok") is False:
             self.history[-1]["ok"] = False
@@ -142,6 +167,7 @@ class Controller(QObject):
         if status == "next" and r.get("box"):
             screen = QApplication.primaryScreen().geometry()
             rect = expand(box_to_rect(r["box"], screen.width(), screen.height()), HIGHLIGHT_PAD)
+            self._log(r, rect)
             self.overlay.show_target(rect, text)
             self.last_instruction = text
             self.expect = r.get("expect")
@@ -152,6 +178,7 @@ class Controller(QObject):
             self.narrator.say(text, interrupt=bool(self.history))
             self._wait()
         elif status == "done":
+            self._log(r, None)
             self.overlay.clear()
             self.state = IDLE
             self.panel.step_label.setText(t("done"))
@@ -160,15 +187,18 @@ class Controller(QObject):
             self.panel.set_running(False)
             self.narrator.say(wording.outro(self.app, self.goal, len(self.history), self.lang, text), interrupt=True)
         else:  # unsure
+            self._log(r, None)
             self.overlay.clear()
             self.last_instruction = None
-            # 比如 Zoom 底部工具栏自动隐藏了：提示用户动一下鼠标，画面一变就自动再问（也可以按「重试」）
+            # 比如要点的东西被挡住了 / 窗口没打开：提示用户先做什么，画面一变就自动再问（也可以按「重试」）
             self.panel.set_status(f"{text or t('unsure')}\n{t('unsure_hint')}")
             self.panel.allow_retry(True)
             self.narrator.say(text, interrupt=True)
             self._wait()
 
     def _on_error(self, msg: str):
+        if getattr(self, "_log_dir", None):
+            self._log({"error": msg}, None)
         self.poll.stop()
         self.state = PAUSED
         self.panel.set_error(msg)

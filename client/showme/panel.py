@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
 )
 
 from showme import i18n
+from showme.config import DEMO_APP, DEMO_GOAL
 from showme.i18n import t
 from showme.overlay import apply_macos_window_settings
 
@@ -59,8 +60,9 @@ class Panel(QWidget):
 
         self.title = QLabel("ShowMe")
         self.title.setObjectName("title")
-        self.app_edit = QLineEdit()
-        self.goal_edit = QLineEdit()
+        self.app_edit = QLineEdit(DEMO_APP)
+        self.goal_edit = QLineEdit(DEMO_GOAL)
+        self.goal_edit.setCursorPosition(0)
         self.lang_box = QComboBox()
         self.lang_box.addItem("English", "en")  # 第一项 = 默认语言
         self.lang_box.addItem("中文", "zh")
