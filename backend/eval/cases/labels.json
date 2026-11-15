@@ -601,5 +601,2877 @@
     ],
     "history": [],
     "expect_status": "done"
+  },
+  {
+    "file": "zoom_time_focused.jpg",
+    "group": "reasoning",
+    "app": "Zoom",
+    "goal": "schedule a meeting for tomorrow afternoon",
+    "lang": "en",
+    "history_items": [
+      {
+        "instruction": "Click the Zoom icon in the Dock at the bottom of the screen.",
+        "ok": true
+      },
+      {
+        "instruction": "Click the orange New Meeting button to start a instant meeting.",
+        "ok": false
+      },
+      {
+        "instruction": "Click the Schedule button in the main window to plan a meeting.",
+        "ok": true
+      },
+      {
+        "instruction": "Click the start date box to change the meeting date to tomorrow.",
+        "ok": null
+      },
+      {
+        "instruction": "Click the start date box to change the date to tomorrow.",
+        "ok": true
+      },
+      {
+        "instruction": "Click tomorrow's date, November 16th, in the calendar popup.",
+        "ok": true
+      },
+      {
+        "instruction": "Click the start time dropdown box to select an afternoon time.",
+        "ok": true
+      }
+    ],
+    "history": [],
+    "expect": "A dropdown menu with time options appears.",
+    "guide": [
+      "Download and install the Zoom app for macOS from zoom.us/download.",
+      "Open Finder, go to Applications, and double-click zoom.us to launch it.",
+      "Click Sign In and log in using your account or SSO credentials.",
+      "Grant macOS Privacy & Security permissions for Camera, Microphone, and Screen Recording.",
+      "Click your profile icon to adjust audio and video settings.",
+      "Click New Meeting to start an instant session or Schedule to plan one.",
+      "Click Join and enter a Meeting ID and Passcode to enter a meeting.",
+      "Use the bottom toolbar during a meeting to control audio, video, and screen sharing."
+    ],
+    "frontmost_app": "Zoom",
+    "elements": [
+      {
+        "id": 1,
+        "role": "AXMenuBarItem",
+        "name": "Apple",
+        "box": [
+          0,
+          7,
+          35,
+          30
+        ]
+      },
+      {
+        "id": 2,
+        "role": "AXMenuBarItem",
+        "name": "Zoom Workplace",
+        "box": [
+          0,
+          30,
+          35,
+          118
+        ]
+      },
+      {
+        "id": 3,
+        "role": "AXMenuBarItem",
+        "name": "编辑",
+        "box": [
+          0,
+          118,
+          35,
+          149
+        ]
+      },
+      {
+        "id": 4,
+        "role": "AXMenuBarItem",
+        "name": "窗口",
+        "box": [
+          0,
+          149,
+          35,
+          180
+        ]
+      },
+      {
+        "id": 5,
+        "role": "AXMenuBarItem",
+        "name": "帮助",
+        "box": [
+          0,
+          180,
+          35,
+          212
+        ]
+      },
+      {
+        "id": 6,
+        "role": "AXButton",
+        "name": "最大化窗口",
+        "box": [
+          96,
+          599,
+          130,
+          620
+        ]
+      },
+      {
+        "id": 7,
+        "role": "AXButton",
+        "name": "关闭窗口",
+        "box": [
+          96,
+          626,
+          130,
+          648
+        ]
+      },
+      {
+        "id": 8,
+        "role": "AXButton",
+        "name": "关闭横幅消息",
+        "box": [
+          152,
+          616,
+          177,
+          632
+        ]
+      },
+      {
+        "id": 9,
+        "role": "AXLink",
+        "name": "立即连接",
+        "box": [
+          155,
+          455,
+          173,
+          493
+        ]
+      },
+      {
+        "id": 10,
+        "role": "AXButton",
+        "name": "关闭横幅消息",
+        "box": [
+          233,
+          616,
+          258,
+          632
+        ]
+      },
+      {
+        "id": 11,
+        "role": "AXLink",
+        "name": "立即尝试",
+        "box": [
+          254,
+          467,
+          274,
+          506
+        ]
+      },
+      {
+        "id": 12,
+        "role": "AXTextField",
+        "name": "主题",
+        "box": [
+          306,
+          312,
+          353,
+          641
+        ]
+      },
+      {
+        "id": 13,
+        "role": "AXComboBox",
+        "name": "开始时间",
+        "box": [
+          382,
+          392,
+          403,
+          436
+        ]
+      },
+      {
+        "id": 14,
+        "role": "AXComboBox",
+        "name": "结束时间",
+        "box": [
+          382,
+          463,
+          403,
+          507
+        ]
+      },
+      {
+        "id": 15,
+        "role": "AXComboBox",
+        "name": "开始日期",
+        "box": [
+          383,
+          320,
+          402,
+          373
+        ]
+      },
+      {
+        "id": 16,
+        "role": "AXComboBox",
+        "name": "结束日期",
+        "box": [
+          383,
+          527,
+          402,
+          580
+        ]
+      },
+      {
+        "id": 17,
+        "role": "AXComboBox",
+        "name": "时区",
+        "box": [
+          421,
+          320,
+          441,
+          467
+        ]
+      },
+      {
+        "id": 18,
+        "role": "AXComboBox",
+        "name": "重复",
+        "box": [
+          465,
+          344,
+          484,
+          386
+        ]
+      },
+      {
+        "id": 19,
+        "role": "AXComboBox",
+        "name": "受邀者",
+        "box": [
+          566,
+          320,
+          587,
+          620
+        ]
+      },
+      {
+        "id": 20,
+        "role": "AXRadioButton",
+        "name": "自动生成",
+        "box": [
+          650,
+          312,
+          666,
+          323
+        ]
+      },
+      {
+        "id": 21,
+        "role": "AXRadioButton",
+        "name": "个人会议号 621 535 8962",
+        "box": [
+          650,
+          513,
+          666,
+          524
+        ]
+      },
+      {
+        "id": 22,
+        "role": "AXButton",
+        "name": "创建议程",
+        "box": [
+          729,
+          312,
+          764,
+          359
+        ]
+      },
+      {
+        "id": 23,
+        "role": "AXButton",
+        "name": "了解更多关于总共只能添加1个白板和20个文件。 在安排事件后，将向受邀者授予白板访问权限。移除受邀者并不会撤销其白板访问",
+        "box": [
+          790,
+          339,
+          811,
+          353
+        ]
+      },
+      {
+        "id": 24,
+        "role": "AXButton",
+        "name": "更多选项",
+        "box": [
+          812,
+          553,
+          845,
+          603
+        ]
+      },
+      {
+        "id": 25,
+        "role": "AXButton",
+        "name": "保存，打开日历邀请窗口",
+        "box": [
+          812,
+          607,
+          845,
+          646
+        ]
+      },
+      {
+        "id": 26,
+        "role": "AXPopUpButton",
+        "name": "添加附件",
+        "box": [
+          817,
+          312,
+          851,
+          382
+        ]
+      },
+      {
+        "id": 27,
+        "role": "AXTextField",
+        "name": "密码",
+        "box": [
+          911,
+          354,
+          946,
+          436
+        ]
+      },
+      {
+        "id": 28,
+        "role": "AXCheckBox",
+        "name": "密码",
+        "box": [
+          916,
+          312,
+          934,
+          323
+        ]
+      },
+      {
+        "id": 29,
+        "role": "AXButton",
+        "name": "了解更多关于了解关于密码的更多信息的信息",
+        "box": [
+          921,
+          441,
+          940,
+          454
+        ]
+      },
+      {
+        "id": 30,
+        "role": "AXDockItem",
+        "name": "访达",
+        "box": [
+          940,
+          37,
+          990,
+          61
+        ]
+      },
+      {
+        "id": 31,
+        "role": "AXDockItem",
+        "name": "App",
+        "box": [
+          940,
+          61,
+          990,
+          84
+        ]
+      },
+      {
+        "id": 32,
+        "role": "AXDockItem",
+        "name": "Safari浏览器",
+        "box": [
+          940,
+          84,
+          990,
+          108
+        ]
+      },
+      {
+        "id": 33,
+        "role": "AXDockItem",
+        "name": "信息",
+        "box": [
+          940,
+          108,
+          990,
+          132
+        ]
+      },
+      {
+        "id": 34,
+        "role": "AXDockItem",
+        "name": "邮件",
+        "box": [
+          940,
+          132,
+          990,
+          156
+        ]
+      },
+      {
+        "id": 35,
+        "role": "AXDockItem",
+        "name": "地图",
+        "box": [
+          940,
+          156,
+          990,
+          180
+        ]
+      },
+      {
+        "id": 36,
+        "role": "AXDockItem",
+        "name": "照片",
+        "box": [
+          940,
+          180,
+          990,
+          203
+        ]
+      },
+      {
+        "id": 37,
+        "role": "AXDockItem",
+        "name": "FaceTime通话",
+        "box": [
+          940,
+          203,
+          990,
+          227
+        ]
+      },
+      {
+        "id": 38,
+        "role": "AXDockItem",
+        "name": "日历",
+        "box": [
+          940,
+          227,
+          990,
+          251
+        ]
+      },
+      {
+        "id": 39,
+        "role": "AXDockItem",
+        "name": "通讯录",
+        "box": [
+          940,
+          251,
+          990,
+          275
+        ]
+      },
+      {
+        "id": 40,
+        "role": "AXDockItem",
+        "name": "提醒事项",
+        "box": [
+          940,
+          275,
+          990,
+          299
+        ]
+      },
+      {
+        "id": 41,
+        "role": "AXDockItem",
+        "name": "备忘录",
+        "box": [
+          940,
+          299,
+          990,
+          322
+        ]
+      },
+      {
+        "id": 42,
+        "role": "AXDockItem",
+        "name": "无边记",
+        "box": [
+          940,
+          322,
+          990,
+          346
+        ]
+      },
+      {
+        "id": 43,
+        "role": "AXDockItem",
+        "name": "视频",
+        "box": [
+          940,
+          346,
+          990,
+          370
+        ]
+      },
+      {
+        "id": 44,
+        "role": "AXDockItem",
+        "name": "音乐",
+        "box": [
+          940,
+          370,
+          990,
+          394
+        ]
+      },
+      {
+        "id": 45,
+        "role": "AXDockItem",
+        "name": "Keynote讲演",
+        "box": [
+          940,
+          394,
+          990,
+          418
+        ]
+      },
+      {
+        "id": 46,
+        "role": "AXDockItem",
+        "name": "Numbers表格",
+        "box": [
+          940,
+          418,
+          990,
+          441
+        ]
+      },
+      {
+        "id": 47,
+        "role": "AXDockItem",
+        "name": "Pages文稿",
+        "box": [
+          940,
+          441,
+          990,
+          465
+        ]
+      },
+      {
+        "id": 48,
+        "role": "AXDockItem",
+        "name": "App Store",
+        "box": [
+          940,
+          465,
+          990,
+          489
+        ]
+      },
+      {
+        "id": 49,
+        "role": "AXDockItem",
+        "name": "系统设置",
+        "box": [
+          940,
+          489,
+          990,
+          513
+        ]
+      },
+      {
+        "id": 50,
+        "role": "AXDockItem",
+        "name": "iPhone镜像",
+        "box": [
+          940,
+          513,
+          990,
+          537
+        ]
+      },
+      {
+        "id": 51,
+        "role": "AXDockItem",
+        "name": "Canvas",
+        "box": [
+          940,
+          537,
+          990,
+          561
+        ]
+      },
+      {
+        "id": 52,
+        "role": "AXDockItem",
+        "name": "Google Chrome",
+        "box": [
+          940,
+          561,
+          990,
+          584
+        ]
+      },
+      {
+        "id": 53,
+        "role": "AXDockItem",
+        "name": "Microsoft Edge",
+        "box": [
+          940,
+          584,
+          990,
+          608
+        ]
+      },
+      {
+        "id": 54,
+        "role": "AXDockItem",
+        "name": "微信",
+        "box": [
+          940,
+          608,
+          990,
+          632
+        ]
+      },
+      {
+        "id": 55,
+        "role": "AXDockItem",
+        "name": "Visual Studio Code",
+        "box": [
+          940,
+          632,
+          990,
+          656
+        ]
+      },
+      {
+        "id": 56,
+        "role": "AXDockItem",
+        "name": "Roblox",
+        "box": [
+          940,
+          656,
+          990,
+          680
+        ]
+      },
+      {
+        "id": 57,
+        "role": "AXDockItem",
+        "name": "Visual Studio Code",
+        "box": [
+          940,
+          690,
+          990,
+          714
+        ]
+      },
+      {
+        "id": 58,
+        "role": "AXDockItem",
+        "name": "Claude",
+        "box": [
+          940,
+          714,
+          990,
+          738
+        ]
+      },
+      {
+        "id": 59,
+        "role": "AXDockItem",
+        "name": "文本编辑",
+        "box": [
+          940,
+          738,
+          990,
+          762
+        ]
+      },
+      {
+        "id": 60,
+        "role": "AXDockItem",
+        "name": "Zoom",
+        "box": [
+          940,
+          762,
+          990,
+          786
+        ]
+      },
+      {
+        "id": 61,
+        "role": "AXDockItem",
+        "name": "下载",
+        "box": [
+          940,
+          797,
+          990,
+          820
+        ]
+      },
+      {
+        "id": 62,
+        "role": "AXDockItem",
+        "name": "Real Private Fixed Investment 4",
+        "box": [
+          940,
+          820,
+          990,
+          844
+        ]
+      },
+      {
+        "id": 63,
+        "role": "AXDockItem",
+        "name": "unemployment rate",
+        "box": [
+          940,
+          844,
+          990,
+          868
+        ]
+      },
+      {
+        "id": 64,
+        "role": "AXDockItem",
+        "name": "SAGDP1__ALL_AREAS_1997_2024",
+        "box": [
+          940,
+          868,
+          990,
+          892
+        ]
+      },
+      {
+        "id": 65,
+        "role": "AXDockItem",
+        "name": "real GDP",
+        "box": [
+          940,
+          892,
+          990,
+          916
+        ]
+      },
+      {
+        "id": 66,
+        "role": "AXDockItem",
+        "name": "Real Private Fixed Investment 2",
+        "box": [
+          940,
+          916,
+          990,
+          939
+        ]
+      },
+      {
+        "id": 67,
+        "role": "AXDockItem",
+        "name": "废纸篓",
+        "box": [
+          940,
+          939,
+          990,
+          963
+        ]
+      },
+      {
+        "id": 68,
+        "role": "AXCheckBox",
+        "name": "等候室",
+        "box": [
+          967,
+          312,
+          984,
+          323
+        ]
+      }
+    ],
+    "note": "09：上一步点了开始时间，只获得焦点、列表没打开。confirmed=点击开始时间 → 再点开始时间（或在里面输入时间），不能说上一步失败",
+    "confirmed": {
+      "kind": "click",
+      "target": "开始时间",
+      "detail": "focused AXComboBox '开始时间'"
+    },
+    "target_px": [
+      565,
+      357,
+      651,
+      393
+    ]
+  },
+  {
+    "file": "zoom_time_list.jpg",
+    "group": "reasoning",
+    "app": "Zoom",
+    "goal": "schedule a meeting for tomorrow afternoon",
+    "lang": "en",
+    "history_items": [
+      {
+        "instruction": "Click the Zoom icon in the Dock at the bottom of the screen.",
+        "ok": true
+      },
+      {
+        "instruction": "Click the orange New Meeting button to start a instant meeting.",
+        "ok": false
+      },
+      {
+        "instruction": "Click the Schedule button in the main window to plan a meeting.",
+        "ok": true
+      },
+      {
+        "instruction": "Click the start date box to change the meeting date to tomorrow.",
+        "ok": null
+      },
+      {
+        "instruction": "Click the start date box to change the date to tomorrow.",
+        "ok": true
+      },
+      {
+        "instruction": "Click tomorrow's date, November 16th, in the calendar popup.",
+        "ok": true
+      },
+      {
+        "instruction": "Click the start time dropdown box to select an afternoon time.",
+        "ok": true
+      },
+      {
+        "instruction": "Click the start time dropdown to select an afternoon time.",
+        "ok": true
+      }
+    ],
+    "history": [],
+    "expect": "A list of time options appears.",
+    "guide": [
+      "Download and install the Zoom app for macOS from zoom.us/download.",
+      "Open Finder, go to Applications, and double-click zoom.us to launch it.",
+      "Click Sign In and log in using your account or SSO credentials.",
+      "Grant macOS Privacy & Security permissions for Camera, Microphone, and Screen Recording.",
+      "Click your profile icon to adjust audio and video settings.",
+      "Click New Meeting to start an instant session or Schedule to plan one.",
+      "Click Join and enter a Meeting ID and Passcode to enter a meeting.",
+      "Use the bottom toolbar during a meeting to control audio, video, and screen sharing."
+    ],
+    "frontmost_app": "Zoom",
+    "elements": [
+      {
+        "id": 1,
+        "role": "AXMenuBarItem",
+        "name": "Apple",
+        "box": [
+          0,
+          7,
+          35,
+          30
+        ]
+      },
+      {
+        "id": 2,
+        "role": "AXMenuBarItem",
+        "name": "Zoom Workplace",
+        "box": [
+          0,
+          30,
+          35,
+          118
+        ]
+      },
+      {
+        "id": 3,
+        "role": "AXMenuBarItem",
+        "name": "编辑",
+        "box": [
+          0,
+          118,
+          35,
+          149
+        ]
+      },
+      {
+        "id": 4,
+        "role": "AXMenuBarItem",
+        "name": "窗口",
+        "box": [
+          0,
+          149,
+          35,
+          180
+        ]
+      },
+      {
+        "id": 5,
+        "role": "AXMenuBarItem",
+        "name": "帮助",
+        "box": [
+          0,
+          180,
+          35,
+          212
+        ]
+      },
+      {
+        "id": 6,
+        "role": "AXButton",
+        "name": "最大化窗口",
+        "box": [
+          96,
+          599,
+          130,
+          620
+        ]
+      },
+      {
+        "id": 7,
+        "role": "AXButton",
+        "name": "关闭窗口",
+        "box": [
+          96,
+          626,
+          130,
+          648
+        ]
+      },
+      {
+        "id": 8,
+        "role": "AXButton",
+        "name": "关闭横幅消息",
+        "box": [
+          152,
+          616,
+          177,
+          632
+        ]
+      },
+      {
+        "id": 9,
+        "role": "AXLink",
+        "name": "立即连接",
+        "box": [
+          155,
+          455,
+          173,
+          493
+        ]
+      },
+      {
+        "id": 10,
+        "role": "AXButton",
+        "name": "关闭横幅消息",
+        "box": [
+          233,
+          616,
+          258,
+          632
+        ]
+      },
+      {
+        "id": 11,
+        "role": "AXLink",
+        "name": "立即尝试",
+        "box": [
+          254,
+          467,
+          274,
+          506
+        ]
+      },
+      {
+        "id": 12,
+        "role": "AXTextField",
+        "name": "主题",
+        "box": [
+          306,
+          312,
+          353,
+          641
+        ]
+      },
+      {
+        "id": 13,
+        "role": "AXComboBox",
+        "name": "开始时间",
+        "box": [
+          382,
+          392,
+          403,
+          436
+        ]
+      },
+      {
+        "id": 14,
+        "role": "AXComboBox",
+        "name": "结束时间",
+        "box": [
+          382,
+          463,
+          403,
+          507
+        ]
+      },
+      {
+        "id": 15,
+        "role": "AXComboBox",
+        "name": "开始日期",
+        "box": [
+          383,
+          320,
+          402,
+          373
+        ]
+      },
+      {
+        "id": 16,
+        "role": "AXComboBox",
+        "name": "结束日期",
+        "box": [
+          383,
+          527,
+          402,
+          580
+        ]
+      },
+      {
+        "id": 17,
+        "role": "AXComboBox",
+        "name": "时区",
+        "box": [
+          421,
+          320,
+          441,
+          467
+        ]
+      },
+      {
+        "id": 18,
+        "role": "AXComboBox",
+        "name": "重复",
+        "box": [
+          465,
+          344,
+          484,
+          386
+        ]
+      },
+      {
+        "id": 19,
+        "role": "AXComboBox",
+        "name": "受邀者",
+        "box": [
+          566,
+          320,
+          587,
+          620
+        ]
+      },
+      {
+        "id": 20,
+        "role": "AXRadioButton",
+        "name": "自动生成",
+        "box": [
+          650,
+          312,
+          666,
+          323
+        ]
+      },
+      {
+        "id": 21,
+        "role": "AXRadioButton",
+        "name": "个人会议号 621 535 8962",
+        "box": [
+          650,
+          513,
+          666,
+          524
+        ]
+      },
+      {
+        "id": 22,
+        "role": "AXButton",
+        "name": "创建议程",
+        "box": [
+          729,
+          312,
+          764,
+          359
+        ]
+      },
+      {
+        "id": 23,
+        "role": "AXButton",
+        "name": "了解更多关于总共只能添加1个白板和20个文件。 在安排事件后，将向受邀者授予白板访问权限。移除受邀者并不会撤销其白板访问",
+        "box": [
+          790,
+          339,
+          811,
+          353
+        ]
+      },
+      {
+        "id": 24,
+        "role": "AXButton",
+        "name": "更多选项",
+        "box": [
+          812,
+          553,
+          845,
+          603
+        ]
+      },
+      {
+        "id": 25,
+        "role": "AXButton",
+        "name": "保存，打开日历邀请窗口",
+        "box": [
+          812,
+          607,
+          845,
+          646
+        ]
+      },
+      {
+        "id": 26,
+        "role": "AXPopUpButton",
+        "name": "添加附件",
+        "box": [
+          817,
+          312,
+          851,
+          382
+        ]
+      },
+      {
+        "id": 27,
+        "role": "AXTextField",
+        "name": "密码",
+        "box": [
+          911,
+          354,
+          946,
+          436
+        ]
+      },
+      {
+        "id": 28,
+        "role": "AXCheckBox",
+        "name": "密码",
+        "box": [
+          916,
+          312,
+          934,
+          323
+        ]
+      },
+      {
+        "id": 29,
+        "role": "AXButton",
+        "name": "了解更多关于了解关于密码的更多信息的信息",
+        "box": [
+          921,
+          441,
+          940,
+          454
+        ]
+      },
+      {
+        "id": 30,
+        "role": "AXDockItem",
+        "name": "访达",
+        "box": [
+          940,
+          37,
+          990,
+          61
+        ]
+      },
+      {
+        "id": 31,
+        "role": "AXDockItem",
+        "name": "App",
+        "box": [
+          940,
+          61,
+          990,
+          84
+        ]
+      },
+      {
+        "id": 32,
+        "role": "AXDockItem",
+        "name": "Safari浏览器",
+        "box": [
+          940,
+          84,
+          990,
+          108
+        ]
+      },
+      {
+        "id": 33,
+        "role": "AXDockItem",
+        "name": "信息",
+        "box": [
+          940,
+          108,
+          990,
+          132
+        ]
+      },
+      {
+        "id": 34,
+        "role": "AXDockItem",
+        "name": "邮件",
+        "box": [
+          940,
+          132,
+          990,
+          156
+        ]
+      },
+      {
+        "id": 35,
+        "role": "AXDockItem",
+        "name": "地图",
+        "box": [
+          940,
+          156,
+          990,
+          180
+        ]
+      },
+      {
+        "id": 36,
+        "role": "AXDockItem",
+        "name": "照片",
+        "box": [
+          940,
+          180,
+          990,
+          203
+        ]
+      },
+      {
+        "id": 37,
+        "role": "AXDockItem",
+        "name": "FaceTime通话",
+        "box": [
+          940,
+          203,
+          990,
+          227
+        ]
+      },
+      {
+        "id": 38,
+        "role": "AXDockItem",
+        "name": "日历",
+        "box": [
+          940,
+          227,
+          990,
+          251
+        ]
+      },
+      {
+        "id": 39,
+        "role": "AXDockItem",
+        "name": "通讯录",
+        "box": [
+          940,
+          251,
+          990,
+          275
+        ]
+      },
+      {
+        "id": 40,
+        "role": "AXDockItem",
+        "name": "提醒事项",
+        "box": [
+          940,
+          275,
+          990,
+          299
+        ]
+      },
+      {
+        "id": 41,
+        "role": "AXDockItem",
+        "name": "备忘录",
+        "box": [
+          940,
+          299,
+          990,
+          322
+        ]
+      },
+      {
+        "id": 42,
+        "role": "AXDockItem",
+        "name": "无边记",
+        "box": [
+          940,
+          322,
+          990,
+          346
+        ]
+      },
+      {
+        "id": 43,
+        "role": "AXDockItem",
+        "name": "视频",
+        "box": [
+          940,
+          346,
+          990,
+          370
+        ]
+      },
+      {
+        "id": 44,
+        "role": "AXDockItem",
+        "name": "音乐",
+        "box": [
+          940,
+          370,
+          990,
+          394
+        ]
+      },
+      {
+        "id": 45,
+        "role": "AXDockItem",
+        "name": "Keynote讲演",
+        "box": [
+          940,
+          394,
+          990,
+          418
+        ]
+      },
+      {
+        "id": 46,
+        "role": "AXDockItem",
+        "name": "Numbers表格",
+        "box": [
+          940,
+          418,
+          990,
+          441
+        ]
+      },
+      {
+        "id": 47,
+        "role": "AXDockItem",
+        "name": "Pages文稿",
+        "box": [
+          940,
+          441,
+          990,
+          465
+        ]
+      },
+      {
+        "id": 48,
+        "role": "AXDockItem",
+        "name": "App Store",
+        "box": [
+          940,
+          465,
+          990,
+          489
+        ]
+      },
+      {
+        "id": 49,
+        "role": "AXDockItem",
+        "name": "系统设置",
+        "box": [
+          940,
+          489,
+          990,
+          513
+        ]
+      },
+      {
+        "id": 50,
+        "role": "AXDockItem",
+        "name": "iPhone镜像",
+        "box": [
+          940,
+          513,
+          990,
+          537
+        ]
+      },
+      {
+        "id": 51,
+        "role": "AXDockItem",
+        "name": "Canvas",
+        "box": [
+          940,
+          537,
+          990,
+          561
+        ]
+      },
+      {
+        "id": 52,
+        "role": "AXDockItem",
+        "name": "Google Chrome",
+        "box": [
+          940,
+          561,
+          990,
+          584
+        ]
+      },
+      {
+        "id": 53,
+        "role": "AXDockItem",
+        "name": "Microsoft Edge",
+        "box": [
+          940,
+          584,
+          990,
+          608
+        ]
+      },
+      {
+        "id": 54,
+        "role": "AXDockItem",
+        "name": "微信",
+        "box": [
+          940,
+          608,
+          990,
+          632
+        ]
+      },
+      {
+        "id": 55,
+        "role": "AXDockItem",
+        "name": "Visual Studio Code",
+        "box": [
+          940,
+          632,
+          990,
+          656
+        ]
+      },
+      {
+        "id": 56,
+        "role": "AXDockItem",
+        "name": "Roblox",
+        "box": [
+          940,
+          656,
+          990,
+          680
+        ]
+      },
+      {
+        "id": 57,
+        "role": "AXDockItem",
+        "name": "Visual Studio Code",
+        "box": [
+          940,
+          690,
+          990,
+          714
+        ]
+      },
+      {
+        "id": 58,
+        "role": "AXDockItem",
+        "name": "Claude",
+        "box": [
+          940,
+          714,
+          990,
+          738
+        ]
+      },
+      {
+        "id": 59,
+        "role": "AXDockItem",
+        "name": "文本编辑",
+        "box": [
+          940,
+          738,
+          990,
+          762
+        ]
+      },
+      {
+        "id": 60,
+        "role": "AXDockItem",
+        "name": "Zoom",
+        "box": [
+          940,
+          762,
+          990,
+          786
+        ]
+      },
+      {
+        "id": 61,
+        "role": "AXDockItem",
+        "name": "下载",
+        "box": [
+          940,
+          797,
+          990,
+          820
+        ]
+      },
+      {
+        "id": 62,
+        "role": "AXDockItem",
+        "name": "Real Private Fixed Investment 4",
+        "box": [
+          940,
+          820,
+          990,
+          844
+        ]
+      },
+      {
+        "id": 63,
+        "role": "AXDockItem",
+        "name": "unemployment rate",
+        "box": [
+          940,
+          844,
+          990,
+          868
+        ]
+      },
+      {
+        "id": 64,
+        "role": "AXDockItem",
+        "name": "SAGDP1__ALL_AREAS_1997_2024",
+        "box": [
+          940,
+          868,
+          990,
+          892
+        ]
+      },
+      {
+        "id": 65,
+        "role": "AXDockItem",
+        "name": "real GDP",
+        "box": [
+          940,
+          892,
+          990,
+          916
+        ]
+      },
+      {
+        "id": 66,
+        "role": "AXDockItem",
+        "name": "Real Private Fixed Investment 2",
+        "box": [
+          940,
+          916,
+          990,
+          939
+        ]
+      },
+      {
+        "id": 67,
+        "role": "AXDockItem",
+        "name": "废纸篓",
+        "box": [
+          940,
+          939,
+          990,
+          963
+        ]
+      },
+      {
+        "id": 68,
+        "role": "AXCheckBox",
+        "name": "等候室",
+        "box": [
+          967,
+          312,
+          984,
+          323
+        ]
+      }
+    ],
+    "note": "10：时间列表打开了，但只显示到 06:45，下午的时间要往下滚 → 框住列表让用户滚动（或在已选中的开始时间框里直接输入），不能框 06:00",
+    "confirmed": {
+      "kind": "click",
+      "target": "开始时间",
+      "detail": null
+    },
+    "target_px": [
+      569,
+      394,
+      674,
+      606
+    ],
+    "alt_target_px": [
+      [
+        565,
+        357,
+        651,
+        393
+      ]
+    ],
+    "avoid_label": [
+      "05:15",
+      "05:30",
+      "06:00",
+      "06:15",
+      "06:30",
+      "06:45"
+    ]
+  },
+  {
+    "file": "zoom_save_google_signin.jpg",
+    "group": "reasoning",
+    "app": "Zoom",
+    "goal": "schedule a meeting for tomorrow afternoon",
+    "lang": "en",
+    "history_items": [
+      {
+        "instruction": "Click the Zoom icon in the Dock at the bottom of the screen.",
+        "ok": true
+      },
+      {
+        "instruction": "Click the orange New Meeting button to start a instant meeting.",
+        "ok": false
+      },
+      {
+        "instruction": "Click the Schedule button in the main window to plan a meeting.",
+        "ok": true
+      },
+      {
+        "instruction": "Click the start date box to change the meeting date to tomorrow.",
+        "ok": null
+      },
+      {
+        "instruction": "Click the start date box to change the date to tomorrow.",
+        "ok": true
+      },
+      {
+        "instruction": "Click tomorrow's date, November 16th, in the calendar popup.",
+        "ok": true
+      },
+      {
+        "instruction": "Click the start time dropdown box to select an afternoon time.",
+        "ok": true
+      },
+      {
+        "instruction": "Click the start time dropdown to select an afternoon time.",
+        "ok": true
+      },
+      {
+        "instruction": "Click an afternoon time like 14:00 or 15:00 from the start time dropdown list.",
+        "ok": true
+      },
+      {
+        "instruction": "Click Save button at the bottom right to schedule the meeting.",
+        "ok": true
+      }
+    ],
+    "history": [],
+    "expect": "The meeting is scheduled and saved.",
+    "guide": [
+      "Download and install the Zoom app for macOS from zoom.us/download.",
+      "Open Finder, go to Applications, and double-click zoom.us to launch it.",
+      "Click Sign In and log in using your account or SSO credentials.",
+      "Grant macOS Privacy & Security permissions for Camera, Microphone, and Screen Recording.",
+      "Click your profile icon to adjust audio and video settings.",
+      "Click New Meeting to start an instant session or Schedule to plan one.",
+      "Click Join and enter a Meeting ID and Passcode to enter a meeting.",
+      "Use the bottom toolbar during a meeting to control audio, video, and screen sharing."
+    ],
+    "frontmost_app": "Google Chrome",
+    "elements": [
+      {
+        "id": 1,
+        "role": "AXMenuBarItem",
+        "name": "Apple",
+        "box": [
+          0,
+          7,
+          35,
+          30
+        ]
+      },
+      {
+        "id": 2,
+        "role": "AXMenuBarItem",
+        "name": "Zoom Workplace",
+        "box": [
+          0,
+          30,
+          35,
+          118
+        ]
+      },
+      {
+        "id": 3,
+        "role": "AXMenuBarItem",
+        "name": "编辑",
+        "box": [
+          0,
+          118,
+          35,
+          149
+        ]
+      },
+      {
+        "id": 4,
+        "role": "AXMenuBarItem",
+        "name": "窗口",
+        "box": [
+          0,
+          149,
+          35,
+          180
+        ]
+      },
+      {
+        "id": 5,
+        "role": "AXMenuBarItem",
+        "name": "帮助",
+        "box": [
+          0,
+          180,
+          35,
+          212
+        ]
+      },
+      {
+        "id": 6,
+        "role": "AXButton",
+        "name": "搜索 (⌘E) ⌘E",
+        "box": [
+          171,
+          494,
+          206,
+          794
+        ]
+      },
+      {
+        "id": 7,
+        "role": "AXButton",
+        "name": "Zoom, Caijunyi Sun, 在线, 基础版 account",
+        "box": [
+          171,
+          924,
+          206,
+          948
+        ]
+      },
+      {
+        "id": 8,
+        "role": "AXButton",
+        "name": "升级",
+        "box": [
+          172,
+          834,
+          205,
+          875
+        ]
+      },
+      {
+        "id": 9,
+        "role": "AXButton",
+        "name": "Back in Chat(⌘ + left bracket)",
+        "box": [
+          173,
+          424,
+          204,
+          445
+        ]
+      },
+      {
+        "id": 10,
+        "role": "AXButton",
+        "name": "Forward in Chat(⌘ + right bracket)",
+        "box": [
+          173,
+          447,
+          204,
+          468
+        ]
+      },
+      {
+        "id": 11,
+        "role": "AXButton",
+        "name": "历史记录",
+        "box": [
+          173,
+          470,
+          204,
+          491
+        ]
+      },
+      {
+        "id": 12,
+        "role": "AXButton",
+        "name": "新建",
+        "box": [
+          173,
+          797,
+          204,
+          817
+        ]
+      },
+      {
+        "id": 13,
+        "role": "AXButton",
+        "name": "打开活动中心",
+        "box": [
+          173,
+          878,
+          204,
+          899
+        ]
+      },
+      {
+        "id": 14,
+        "role": "AXButton",
+        "name": "日历始终在主屏幕上显示。",
+        "box": [
+          173,
+          901,
+          204,
+          922
+        ]
+      },
+      {
+        "id": 15,
+        "role": "AXButton",
+        "name": null,
+        "box": [
+          180,
+          307,
+          197,
+          318
+        ]
+      },
+      {
+        "id": 16,
+        "role": "AXButton",
+        "name": null,
+        "box": [
+          180,
+          323,
+          197,
+          334
+        ]
+      },
+      {
+        "id": 17,
+        "role": "AXButton",
+        "name": "此按钮也可以执行缩放窗口的操作",
+        "box": [
+          180,
+          339,
+          197,
+          350
+        ]
+      },
+      {
+        "id": 18,
+        "role": "AXButton",
+        "name": "主页, selected, 1 of 6",
+        "box": [
+          215,
+          299,
+          268,
+          356
+        ]
+      },
+      {
+        "id": 19,
+        "role": "AXButton",
+        "name": "关闭AI助手 (⇧⌘O)",
+        "box": [
+          233,
+          667,
+          267,
+          688
+        ]
+      },
+      {
+        "id": 20,
+        "role": "AXButton",
+        "name": "聊天记录",
+        "box": [
+          243,
+          711,
+          268,
+          727
+        ]
+      },
+      {
+        "id": 21,
+        "role": "AXButton",
+        "name": "发起聊天",
+        "box": [
+          243,
+          888,
+          268,
+          904
+        ]
+      },
+      {
+        "id": 22,
+        "role": "AXButton",
+        "name": "关闭",
+        "box": [
+          243,
+          910,
+          268,
+          926
+        ]
+      },
+      {
+        "id": 23,
+        "role": "AXButton",
+        "name": "会议, 2 of 6",
+        "box": [
+          268,
+          299,
+          320,
+          356
+        ]
+      },
+      {
+        "id": 24,
+        "role": "AXButton",
+        "name": "聊天, 3 of 6",
+        "box": [
+          320,
+          299,
+          372,
+          356
+        ]
+      },
+      {
+        "id": 25,
+        "role": "AXButton",
+        "name": "会议",
+        "box": [
+          346,
+          399,
+          399,
+          434
+        ]
+      },
+      {
+        "id": 26,
+        "role": "AXButton",
+        "name": "加入会议",
+        "box": [
+          346,
+          455,
+          399,
+          490
+        ]
+      },
+      {
+        "id": 27,
+        "role": "AXButton",
+        "name": "安排会议",
+        "box": [
+          346,
+          511,
+          399,
+          546
+        ]
+      },
+      {
+        "id": 28,
+        "role": "AXButton",
+        "name": "共享屏幕",
+        "box": [
+          346,
+          567,
+          399,
+          601
+        ]
+      },
+      {
+        "id": 29,
+        "role": "AXButton",
+        "name": "我的笔记",
+        "box": [
+          346,
+          622,
+          399,
+          657
+        ]
+      },
+      {
+        "id": 30,
+        "role": "AXButton",
+        "name": "预约, 4 of 6",
+        "box": [
+          372,
+          299,
+          425,
+          356
+        ]
+      },
+      {
+        "id": 31,
+        "role": "AXPopUpButton",
+        "name": "新会议选项",
+        "box": [
+          407,
+          426,
+          424,
+          437
+        ]
+      },
+      {
+        "id": 32,
+        "role": "AXButton",
+        "name": "Hub, 5 of 6",
+        "box": [
+          425,
+          299,
+          477,
+          356
+        ]
+      },
+      {
+        "id": 33,
+        "role": "AXPopUpButton",
+        "name": "选择日历日期：今天, Nov 15",
+        "box": [
+          456,
+          494,
+          490,
+          573
+        ]
+      },
+      {
+        "id": 34,
+        "role": "AXButton",
+        "name": "创建事件",
+        "box": [
+          460,
+          415,
+          485,
+          432
+        ]
+      },
+      {
+        "id": 35,
+        "role": "AXButton",
+        "name": "更多 包含新项目, 6 of 6",
+        "box": [
+          477,
+          299,
+          529,
+          356
+        ]
+      },
+      {
+        "id": 36,
+        "role": "AXButton",
+        "name": "今天",
+        "box": [
+          506,
+          420,
+          531,
+          461
+        ]
+      },
+      {
+        "id": 37,
+        "role": "AXButton",
+        "name": "前一天",
+        "box": [
+          506,
+          465,
+          531,
+          482
+        ]
+      },
+      {
+        "id": 38,
+        "role": "AXButton",
+        "name": "下一天",
+        "box": [
+          506,
+          487,
+          531,
+          504
+        ]
+      },
+      {
+        "id": 39,
+        "role": "AXPopUpButton",
+        "name": "更多日历操作",
+        "box": [
+          506,
+          619,
+          531,
+          636
+        ]
+      },
+      {
+        "id": 40,
+        "role": "AXButton",
+        "name": "总结我的一周",
+        "box": [
+          549,
+          718,
+          583,
+          927
+        ]
+      },
+      {
+        "id": 41,
+        "role": "AXButton",
+        "name": "列出我最近的行动项",
+        "box": [
+          587,
+          718,
+          620,
+          927
+        ]
+      },
+      {
+        "id": 42,
+        "role": "AXTextArea",
+        "name": "发送消息至AI聊天",
+        "box": [
+          655,
+          718,
+          738,
+          918
+        ]
+      },
+      {
+        "id": 43,
+        "role": "AXButton",
+        "name": "安排会议",
+        "box": [
+          726,
+          503,
+          748,
+          554
+        ]
+      },
+      {
+        "id": 44,
+        "role": "AXButton",
+        "name": "添加数据和文件",
+        "box": [
+          738,
+          718,
+          772,
+          740
+        ]
+      },
+      {
+        "id": 45,
+        "role": "AXButton",
+        "name": "所有来源",
+        "box": [
+          738,
+          746,
+          772,
+          770
+        ]
+      },
+      {
+        "id": 46,
+        "role": "AXButton",
+        "name": "发送",
+        "box": [
+          738,
+          897,
+          772,
+          918
+        ]
+      },
+      {
+        "id": 47,
+        "role": "AXButton",
+        "name": "设置",
+        "box": [
+          769,
+          317,
+          802,
+          339
+        ]
+      },
+      {
+        "id": 48,
+        "role": "AXButton",
+        "name": "打开录制文件",
+        "box": [
+          797,
+          420,
+          816,
+          636
+        ]
+      }
+    ],
+    "note": "13：Zoom 点保存后，Chrome 打开了 Google「选择账号」页（登录后连 Zoom 日历）→ 点账号，不能 unsure / 让用户切回 Zoom。elements 是客户端当时读到的（Zoom 的）",
+    "app_switched_from": "Zoom",
+    "target_px": [
+      745,
+      390,
+      1092,
+      455
+    ],
+    "alt_target_px": [
+      [
+        745,
+        458,
+        1092,
+        524
+      ],
+      [
+        745,
+        527,
+        1092,
+        593
+      ]
+    ]
+  },
+  {
+    "file": "zoom_google_account_chooser.jpg",
+    "group": "reasoning",
+    "app": "Zoom",
+    "goal": "schedule a meeting for tomorrow afternoon",
+    "lang": "en",
+    "history_items": [
+      {
+        "instruction": "Click the orange New Meeting button to start a instant meeting.",
+        "ok": false
+      },
+      {
+        "instruction": "Click the Schedule button in the main window to plan a meeting.",
+        "ok": true
+      },
+      {
+        "instruction": "Click the start date box to change the meeting date to tomorrow.",
+        "ok": null
+      },
+      {
+        "instruction": "Click the start date box to change the date to tomorrow.",
+        "ok": true
+      },
+      {
+        "instruction": "Click tomorrow's date, November 16th, in the calendar popup.",
+        "ok": true
+      },
+      {
+        "instruction": "Click the start time dropdown box to select an afternoon time.",
+        "ok": true
+      },
+      {
+        "instruction": "Click the start time dropdown to select an afternoon time.",
+        "ok": true
+      },
+      {
+        "instruction": "Click an afternoon time like 14:00 or 15:00 from the start time dropdown list.",
+        "ok": true
+      },
+      {
+        "instruction": "Click Save button at the bottom right to schedule the meeting.",
+        "ok": false
+      },
+      {
+        "instruction": "Bring the Zoom app to the front by clicking its window title bar.",
+        "ok": null
+      }
+    ],
+    "history": [],
+    "expect": "Zoom window is brought to the front.",
+    "guide": [
+      "Download and install the Zoom app for macOS from zoom.us/download.",
+      "Open Finder, go to Applications, and double-click zoom.us to launch it.",
+      "Click Sign In and log in using your account or SSO credentials.",
+      "Grant macOS Privacy & Security permissions for Camera, Microphone, and Screen Recording.",
+      "Click your profile icon to adjust audio and video settings.",
+      "Click New Meeting to start an instant session or Schedule to plan one.",
+      "Click Join and enter a Meeting ID and Passcode to enter a meeting.",
+      "Use the bottom toolbar during a meeting to control audio, video, and screen sharing."
+    ],
+    "frontmost_app": "Google Chrome",
+    "user_note": "user asked to sign in",
+    "elements": [
+      {
+        "id": 1,
+        "role": "AXMenuBarItem",
+        "name": "Apple",
+        "box": [
+          0,
+          7,
+          35,
+          30
+        ]
+      },
+      {
+        "id": 2,
+        "role": "AXMenuBarItem",
+        "name": "Zoom Workplace",
+        "box": [
+          0,
+          30,
+          35,
+          118
+        ]
+      },
+      {
+        "id": 3,
+        "role": "AXMenuBarItem",
+        "name": "编辑",
+        "box": [
+          0,
+          118,
+          35,
+          149
+        ]
+      },
+      {
+        "id": 4,
+        "role": "AXMenuBarItem",
+        "name": "窗口",
+        "box": [
+          0,
+          149,
+          35,
+          180
+        ]
+      },
+      {
+        "id": 5,
+        "role": "AXMenuBarItem",
+        "name": "帮助",
+        "box": [
+          0,
+          180,
+          35,
+          212
+        ]
+      },
+      {
+        "id": 6,
+        "role": "AXButton",
+        "name": "搜索 (⌘E) ⌘E",
+        "box": [
+          171,
+          494,
+          206,
+          794
+        ]
+      },
+      {
+        "id": 7,
+        "role": "AXButton",
+        "name": "Zoom, Caijunyi Sun, 在线, 基础版 account",
+        "box": [
+          171,
+          924,
+          206,
+          948
+        ]
+      },
+      {
+        "id": 8,
+        "role": "AXButton",
+        "name": "升级",
+        "box": [
+          172,
+          834,
+          205,
+          875
+        ]
+      },
+      {
+        "id": 9,
+        "role": "AXButton",
+        "name": "Back in Chat(⌘ + left bracket)",
+        "box": [
+          173,
+          424,
+          204,
+          445
+        ]
+      },
+      {
+        "id": 10,
+        "role": "AXButton",
+        "name": "Forward in Chat(⌘ + right bracket)",
+        "box": [
+          173,
+          447,
+          204,
+          468
+        ]
+      },
+      {
+        "id": 11,
+        "role": "AXButton",
+        "name": "历史记录",
+        "box": [
+          173,
+          470,
+          204,
+          491
+        ]
+      },
+      {
+        "id": 12,
+        "role": "AXButton",
+        "name": "新建",
+        "box": [
+          173,
+          797,
+          204,
+          817
+        ]
+      },
+      {
+        "id": 13,
+        "role": "AXButton",
+        "name": "打开活动中心",
+        "box": [
+          173,
+          878,
+          204,
+          899
+        ]
+      },
+      {
+        "id": 14,
+        "role": "AXButton",
+        "name": "日历始终在主屏幕上显示。",
+        "box": [
+          173,
+          901,
+          204,
+          922
+        ]
+      },
+      {
+        "id": 15,
+        "role": "AXButton",
+        "name": null,
+        "box": [
+          180,
+          307,
+          197,
+          318
+        ]
+      },
+      {
+        "id": 16,
+        "role": "AXButton",
+        "name": null,
+        "box": [
+          180,
+          323,
+          197,
+          334
+        ]
+      },
+      {
+        "id": 17,
+        "role": "AXButton",
+        "name": "此按钮也可以执行缩放窗口的操作",
+        "box": [
+          180,
+          339,
+          197,
+          350
+        ]
+      },
+      {
+        "id": 18,
+        "role": "AXButton",
+        "name": "主页, selected, 1 of 6",
+        "box": [
+          215,
+          299,
+          268,
+          356
+        ]
+      },
+      {
+        "id": 19,
+        "role": "AXButton",
+        "name": "关闭AI助手 (⇧⌘O)",
+        "box": [
+          233,
+          667,
+          267,
+          688
+        ]
+      },
+      {
+        "id": 20,
+        "role": "AXButton",
+        "name": "聊天记录",
+        "box": [
+          243,
+          711,
+          268,
+          727
+        ]
+      },
+      {
+        "id": 21,
+        "role": "AXButton",
+        "name": "发起聊天",
+        "box": [
+          243,
+          888,
+          268,
+          904
+        ]
+      },
+      {
+        "id": 22,
+        "role": "AXButton",
+        "name": "关闭",
+        "box": [
+          243,
+          910,
+          268,
+          926
+        ]
+      },
+      {
+        "id": 23,
+        "role": "AXButton",
+        "name": "会议, 2 of 6",
+        "box": [
+          268,
+          299,
+          320,
+          356
+        ]
+      },
+      {
+        "id": 24,
+        "role": "AXButton",
+        "name": "聊天, 3 of 6",
+        "box": [
+          320,
+          299,
+          372,
+          356
+        ]
+      },
+      {
+        "id": 25,
+        "role": "AXButton",
+        "name": "会议",
+        "box": [
+          346,
+          399,
+          399,
+          434
+        ]
+      },
+      {
+        "id": 26,
+        "role": "AXButton",
+        "name": "加入会议",
+        "box": [
+          346,
+          455,
+          399,
+          490
+        ]
+      },
+      {
+        "id": 27,
+        "role": "AXButton",
+        "name": "安排会议",
+        "box": [
+          346,
+          511,
+          399,
+          546
+        ]
+      },
+      {
+        "id": 28,
+        "role": "AXButton",
+        "name": "共享屏幕",
+        "box": [
+          346,
+          567,
+          399,
+          601
+        ]
+      },
+      {
+        "id": 29,
+        "role": "AXButton",
+        "name": "我的笔记",
+        "box": [
+          346,
+          622,
+          399,
+          657
+        ]
+      },
+      {
+        "id": 30,
+        "role": "AXButton",
+        "name": "预约, 4 of 6",
+        "box": [
+          372,
+          299,
+          425,
+          356
+        ]
+      },
+      {
+        "id": 31,
+        "role": "AXPopUpButton",
+        "name": "新会议选项",
+        "box": [
+          407,
+          426,
+          424,
+          437
+        ]
+      },
+      {
+        "id": 32,
+        "role": "AXButton",
+        "name": "Hub, 5 of 6",
+        "box": [
+          425,
+          299,
+          477,
+          356
+        ]
+      },
+      {
+        "id": 33,
+        "role": "AXPopUpButton",
+        "name": "选择日历日期：今天, Nov 15",
+        "box": [
+          456,
+          494,
+          490,
+          573
+        ]
+      },
+      {
+        "id": 34,
+        "role": "AXButton",
+        "name": "创建事件",
+        "box": [
+          460,
+          415,
+          485,
+          432
+        ]
+      },
+      {
+        "id": 35,
+        "role": "AXButton",
+        "name": "更多 包含新项目, 6 of 6",
+        "box": [
+          477,
+          299,
+          529,
+          356
+        ]
+      },
+      {
+        "id": 36,
+        "role": "AXButton",
+        "name": "今天",
+        "box": [
+          506,
+          420,
+          531,
+          461
+        ]
+      },
+      {
+        "id": 37,
+        "role": "AXButton",
+        "name": "前一天",
+        "box": [
+          506,
+          465,
+          531,
+          482
+        ]
+      },
+      {
+        "id": 38,
+        "role": "AXButton",
+        "name": "下一天",
+        "box": [
+          506,
+          487,
+          531,
+          504
+        ]
+      },
+      {
+        "id": 39,
+        "role": "AXPopUpButton",
+        "name": "更多日历操作",
+        "box": [
+          506,
+          619,
+          531,
+          636
+        ]
+      },
+      {
+        "id": 40,
+        "role": "AXButton",
+        "name": "总结我的一周",
+        "box": [
+          549,
+          718,
+          583,
+          927
+        ]
+      },
+      {
+        "id": 41,
+        "role": "AXButton",
+        "name": "列出我最近的行动项",
+        "box": [
+          587,
+          718,
+          620,
+          927
+        ]
+      },
+      {
+        "id": 42,
+        "role": "AXTextArea",
+        "name": "发送消息至AI聊天",
+        "box": [
+          655,
+          718,
+          738,
+          918
+        ]
+      },
+      {
+        "id": 43,
+        "role": "AXButton",
+        "name": "安排会议",
+        "box": [
+          726,
+          503,
+          748,
+          554
+        ]
+      },
+      {
+        "id": 44,
+        "role": "AXButton",
+        "name": "添加数据和文件",
+        "box": [
+          738,
+          718,
+          772,
+          740
+        ]
+      },
+      {
+        "id": 45,
+        "role": "AXButton",
+        "name": "所有来源",
+        "box": [
+          738,
+          746,
+          772,
+          770
+        ]
+      },
+      {
+        "id": 46,
+        "role": "AXButton",
+        "name": "发送",
+        "box": [
+          738,
+          897,
+          772,
+          918
+        ]
+      },
+      {
+        "id": 47,
+        "role": "AXButton",
+        "name": "设置",
+        "box": [
+          769,
+          317,
+          802,
+          339
+        ]
+      },
+      {
+        "id": 48,
+        "role": "AXButton",
+        "name": "打开录制文件",
+        "box": [
+          797,
+          420,
+          816,
+          636
+        ]
+      }
+    ],
+    "note": "15：同一个 Google 选择账号页，用户说要登录 → 点账号",
+    "target_px": [
+      745,
+      390,
+      1092,
+      455
+    ],
+    "alt_target_px": [
+      [
+        745,
+        458,
+        1092,
+        524
+      ],
+      [
+        745,
+        527,
+        1092,
+        593
+      ]
+    ]
   }
 ]

@@ -5,6 +5,8 @@ labels.json：[{"file": "x.png", "app": "...", "goal": "...", "history": ["已�
   任务已完成的截图：不写 target_px，改写 "expect_status": "done"（模型返回 done 才算命中）
   需要用户先做点什么的截图（如 Zoom 工具栏自动隐藏）：写 "expect_status": "unsure"
   可选 "app_en" / "goal_en" / "history_en"：--lang en 时用英文的目标和历史（模拟客户端发英文）
+  可选 "expect" / "guide" / "elements" / "confirmed" / "app_switched_from" / "deep"：原样放进请求（真实日志的 case）
+  可选 "avoid_label"：字符串或列表，target_label 含有其中任何一个就算错
 运行：cd backend && uv run python eval/eval_boxes.py [文件名关键字] [--lang en|zh]
   --lang 强制所有 case 用这个语言（不写就用每个 case 自己的 lang，默认 zh）
 """
@@ -69,6 +71,7 @@ def main():
     stage = {"prep": [], "gemini": [], "post": []}
     by_group: dict[str, list] = {}
     guess_given, guess_ok, guess_checked = 0, 0, 0
+    deep_rows: list = []
     for c in cases:
         b64, size = to_jpeg_b64(CASES / c["file"])
         want_status = c.get("expect_status")  # "done" / "unsure" / None（要框）
@@ -80,7 +83,11 @@ def main():
         items = [steps.HistoryItem(**h) for h in c["history_items"]] if c.get("history_items") else \
             [steps.HistoryItem(instruction=h, ok=True) for h in history]
         body = steps.NextStepIn(app=app, goal=goal, lang=lang, screenshot=b64, history=items,
-                                user_note=c.get("user_note"), frontmost_app=c.get("frontmost_app"))
+                                user_note=c.get("user_note"), frontmost_app=c.get("frontmost_app"),
+                                # 可选：真实请求里的这些字段（client/logs 里的 case），没写就和以前一样
+                                expect=c.get("expect"), guide=c.get("guide"), elements=c.get("elements"),
+                                confirmed=c.get("confirmed"), app_switched_from=c.get("app_switched_from"),
+                                deep=c.get("deep", False))
         t0 = time.perf_counter()
         try:
             out = steps.next_step(body)
@@ -104,13 +111,20 @@ def main():
                 an = px_to_norm(alt, size)
                 hit = hit or (an[0] <= cy <= an[2] and an[1] <= cx <= an[3])
             score = iou(out.box, truth)
-        if hit and c.get("avoid_label") and out and c["avoid_label"].lower() in (out.target_label or "").lower():
+        avoid = c.get("avoid_label") or []
+        avoid = [avoid] if isinstance(avoid, str) else avoid  # 可以是一个或一组不该选的 label
+        if hit and out and any(x.lower() in (out.target_label or "").lower() for x in avoid):
             hit = False
         hits += hit
         by_group.setdefault(c.get("group", "tuned"), []).append((hit, dt))
+        deep = not err and steps.LAST_THINKING.get("level") != steps.THINKING
+        if deep:
+            deep_rows.append((hit, dt))
         if not want_status:
             ious.append(score)
         detail = err or f"{out.status} box={out.box} label={out.target_label!r}"
+        if not err:
+            detail += f" thinking={steps.LAST_THINKING.get('level')}({steps.LAST_THINKING.get('reason')})"
         g = out.next_guess if out else None
         if g:
             guess_given += 1
@@ -127,6 +141,10 @@ def main():
             mixed = lang == "en" and bool(CJK.search(out.instruction))
             cjk_bad += mixed
             print(f"     → 「{out.instruction}」（{words} {unit}）{'  ⚠️ 英文指令里有中文，声音读不了' if mixed else ''}")
+            if out.situation or out.reasoning:
+                print(f"     situation: {out.situation} | reasoning: {out.reasoning} | app: {out.app}")
+            if out.plan:
+                print(f"     plan: {out.plan}")
     n = len(cases)
     if n:
         miou = sum(ious) / len(ious) if ious else 0
@@ -138,6 +156,10 @@ def main():
             avg = {k: sum(v) / len(v) for k, v in stage.items()}
             print(f"  阶段平均：解码+prompt {avg['prep']:.0f}ms · Gemini {avg['gemini']:.0f}ms · 修框 {avg['post']:.0f}ms"
                   f"（thinking={steps.THINKING or 'default'}）")
+        if deep_rows:
+            dh = sum(h for h, _ in deep_rows)
+            print(f"  深度思考（thinking={steps.DEEP_THINKING}）的 {len(deep_rows)} 步：命中率 {dh}/{len(deep_rows)}，"
+                  f"平均耗时 {sum(t for _, t in deep_rows) / len(deep_rows):.1f}s；其余 {n - len(deep_rows)} 步 thinking={steps.THINKING}")
         if len(by_group) > 1 or a.group:
             for g, rows in sorted(by_group.items()):
                 gh = sum(h for h, _ in rows)
