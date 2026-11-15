@@ -1,0 +1,37 @@
+"""客户端配置。光圈样式都在下面「高亮样式」一节，改完重启客户端就生效。"""
+
+import os
+
+# ---- 后端 ----
+API_BASE = os.getenv("SHOWME_API", "http://localhost:8000")
+
+# ---- 截图 ----
+MAX_SIDE = 1280  # 发给后端的截图长边
+JPEG_QUALITY = 70
+
+# ---- 画面变化检测 ----
+POLL_S = 0.4  # 等用户操作时，多久截一次图
+PIXEL_DELTA = 0.08  # 64x64 灰度图里，一个像素亮度变化超过这个值才算「这个像素变了」
+CHANGE_THRESHOLD = 0.004  # 变了的像素超过这个比例（约 16 / 4096）算「画面变了」；漏检就调小，误判就调大
+STABLE_FRAMES = 2  # 变化后连续几帧不动，才算用户这一步做完了
+
+# ---- 高亮样式（光圈）----
+HIGHLIGHT_PAD = 12  # 框比目标元素四周大多少（逻辑像素）
+HIGHLIGHT_COLOR = "#FF2D78"  # 框和光晕的颜色
+BORDER_WIDTH = 4  # 实线边框粗细
+CORNER_RADIUS = 10  # 圆角
+GLOW_SIZE = 16  # 光晕向外扩散多宽
+BREATHE_MS = 1400  # 呼吸动画一个周期多少毫秒；0 = 不呼吸
+BUBBLE_FONT_SIZE = 15  # 提示气泡字号
+BUBBLE_BG = "#1C1C1E"  # 提示气泡背景
+BUBBLE_FG = "#FFFFFF"  # 提示气泡文字
+
+# ---- 字幕（屏幕底部居中）----
+CAPTIONS = False  # 先不用字幕，只用 ElevenLabs 语音；改成 True 就重新显示
+CAPTION_FONT_SIZE = 22
+CAPTION_BOTTOM = 72  # 离屏幕底部多远
+CAPTION_MAX_W = 0.6  # 最宽占屏幕宽度的比例
+CAPTION_HOLD_S = 0.8  # 语音读完后字幕再停留多久
+
+# 截图前隐藏高亮层后等多久（C0 实测 0.05 秒够）
+HIDE_WAIT_S = 0.05
