@@ -8,7 +8,7 @@ DEMO_GOAL = "Clone the GitHub repo https://github.com/octocat/Hello-World"
 
 # ---- 实时语音的麦克风过滤（voice_filter.py）----
 VAD_THRESHOLD = 0.5  # Silero 人声概率超过多少算「有人在说话」
-VOICE_THRESHOLD = 0.5  # 声纹余弦相似度超过多少算「是本人」（实测后调整）
+VOICE_THRESHOLD = 0.6  # 声纹余弦相似度超过多少算「是我们」。安静处录的声纹：本人 0.61–0.77（中位 0.72），外放回声连 VAD 都过不了；嘈杂处旁边人声曾到 0.58（旧声纹）→ 现场要再测
 VOICE_CONFIRM_S = 0.5  # 累计多少秒人声后做一次声纹判断（这段时间先压低 ShowMe 的音量）
 VOICE_END_S = 0.6  # 连续多少秒没人声算这段话结束
 DUCK_VOLUME = 0.3  # 检测到人声时 ShowMe 播放音量压到多少

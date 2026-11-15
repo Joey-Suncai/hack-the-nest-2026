@@ -23,7 +23,8 @@ HOME = Path(os.path.expanduser("~/.showme"))
 MODELS = HOME / "models"
 VAD_MODEL = MODELS / "silero_vad.onnx"
 SPEAKER_MODEL = MODELS / "wespeaker_en_voxceleb_resnet34.onnx"  # 实测比 CAM++ 区分得开（同一声音 0.93 vs 不同 0.58）
-VOICEPRINT = HOME / "voiceprint.npy"
+VOICEPRINT = HOME / "voiceprint.npy"  # 旧的单人声纹（还认）
+VOICEPRINTS = HOME / "voiceprints"  # 每个人一份：~/.showme/voiceprints/<名字>.npy
 
 
 # ================= 人声检测 =================
@@ -91,6 +92,27 @@ def load_voiceprint(path: Path = VOICEPRINT) -> np.ndarray | None:
         return None
 
 
+def load_voiceprints(folder: Path = VOICEPRINTS, legacy: Path = VOICEPRINT) -> dict[str, np.ndarray]:
+    """所有录过的人 {名字: 声纹}。"""
+    out = {}
+    if folder.is_dir():
+        for f in sorted(folder.glob("*.npy")):
+            v = load_voiceprint(f)
+            if v is not None:
+                out[f.stem] = v
+    if not out and (v := load_voiceprint(legacy)) is not None:
+        out["me"] = v
+    return out
+
+
+def best_score(emb: np.ndarray, prints: dict[str, np.ndarray]) -> tuple[str | None, float]:
+    """和每个人比，取分数最高的那个人。"""
+    if not prints:
+        return None, -1.0
+    name, v = max(prints.items(), key=lambda kv: cosine(emb, kv[1]))
+    return name, cosine(emb, v)
+
+
 # ================= 打断判断（先压低音量、再确认）=================
 IDLE, CANDIDATE, ACCEPTED, REJECTED = "IDLE", "CANDIDATE", "ACCEPTED", "REJECTED"
 
@@ -117,11 +139,12 @@ class Gate:
     - 按住说话模式：只有按着键时才发（不做 VAD / 声纹判断）
     """
 
-    def __init__(self, scorer=None, voiceprint: np.ndarray | None = None, threshold: float = C.VOICE_THRESHOLD,
+    def __init__(self, scorer=None, voiceprint=None, threshold: float = C.VOICE_THRESHOLD,
                  vad_threshold: float = C.VAD_THRESHOLD, confirm_s: float = C.VOICE_CONFIRM_S, end_s: float = C.VOICE_END_S,
                  log=print):
         self.scorer = scorer  # samples → 声纹向量
-        self.voiceprint = voiceprint
+        # 可以是一个人（向量）或几个人（{名字: 向量}）：Teresa 和 Joey 都会说话，谁的分数过阈值都算
+        self.voiceprints = voiceprint if isinstance(voiceprint, dict) else ({"me": voiceprint} if voiceprint is not None else {})
         self.threshold = threshold
         self.vad_threshold = vad_threshold
         self.confirm_frames = max(1, round(confirm_s / FRAME_S))
@@ -140,8 +163,12 @@ class Gate:
         self._ducked = False
 
     @property
+    def voiceprint(self):
+        return next(iter(self.voiceprints.values()), None)
+
+    @property
     def uses_voiceprint(self) -> bool:
-        return self.filter_enabled and self.voiceprint is not None and self.scorer is not None
+        return self.filter_enabled and bool(self.voiceprints) and self.scorer is not None
 
     def feed(self, frame: np.ndarray, vad_prob: float, agent_speaking: bool) -> GateOut:
         out = GateOut()
@@ -187,10 +214,10 @@ class Gate:
         audio = np.concatenate(self._buf)
         if self.uses_voiceprint:
             t0 = time.perf_counter()
-            score = cosine(self.scorer(audio), self.voiceprint)
+            who, score = best_score(self.scorer(audio), self.voiceprints)
             ok = score >= self.threshold
             out.score = score
-            self.log(f"[voice] 声纹分数 {score:.3f}（阈值 {self.threshold}）→ {'本人' if ok else '不是本人'}，"
+            self.log(f"[voice] 声纹分数 {score:.3f}（最像 {who}，阈值 {self.threshold}）→ {'放行' if ok else '不是我们'}，"
                      f"用了 {(time.perf_counter() - t0) * 1000:.0f} ms")
         else:
             ok = True
