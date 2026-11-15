@@ -52,3 +52,19 @@ def test_next_clean_tap_works_after_a_dirty_one():
     t.flags_changed(RIGHT_OPTION_KEYCODE, UP)
     t.flags_changed(RIGHT_OPTION_KEYCODE, DOWN)
     assert t.flags_changed(RIGHT_OPTION_KEYCODE, UP) is True
+
+
+def test_gate_waits_for_chime_before_sending():
+    import time
+
+    import numpy as np
+
+    from showme.voice_filter import FRAME, Gate
+
+    g = Gate(voiceprint=None, log=lambda *a: None)
+    g.push_to_talk, g.key_down = True, True
+    g.open_at = time.monotonic() + 0.2
+    f = np.zeros(FRAME, np.float32)
+    assert g.feed(f, 0.0, False).send == []  # 提示音还没放完
+    time.sleep(0.25)
+    assert len(g.feed(f, 0.0, False).send) == 1

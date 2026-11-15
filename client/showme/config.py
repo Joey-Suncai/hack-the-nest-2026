@@ -15,7 +15,10 @@ DUCK_VOLUME = 0.3  # 检测到人声时 ShowMe 播放音量压到多少
 PTT_KEY = "space"  # 「按住说话」用的键
 TAP_TO_TALK_DEFAULT = True
 VOICE_FILTER_DEFAULT = False  # 按键说话模式下不做 VAD / 声纹；开关保留，默认关（实测陌生人 0.67 vs 我们 0.61，分不开）
-TALK_MAX_S = 30  # 忘了按结束，最长收音 30 秒  # 默认「点按收音」：现场太吵，免提时 VAD / 声纹连我们自己的声音都挡（联调实测）
+TALK_MAX_S = 30  # 忘了按结束，最长收音 30 秒
+# 实时语音用不用 macOS 语音处理（回声消除）。按键说话时 Agent 的声音在用户说话期间是静音的，没有回声，不需要；
+# 而且联调发现：从「终端」启动时 AVAudioEngine 语音处理的麦克风一直没有数据（sounddevice 正常）
+USE_AEC = False  # 默认「点按收音」：现场太吵，免提时 VAD / 声纹连我们自己的声音都挡（联调实测）
 
 # ---- 语音输入 ----
 MIC_RATE = 16000  # /api/transcribe 要 16 kHz 单声道 WAV

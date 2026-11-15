@@ -173,8 +173,9 @@ def open_engine():
 class FilteredAgentAudio(AudioInterface):
     """把过滤后的麦克风声音交给 Agent；Agent 的声音从同一个引擎播放。"""
 
-    def __init__(self, gate: Gate, on_event=None):
+    def __init__(self, gate: Gate, on_event=None, use_aec: bool | None = None):
         self.gate = gate
+        self.use_aec = C.USE_AEC if use_aec is None else use_aec
         self.on_event = on_event or (lambda kind, info: None)  # 给面板 / 日志：("accept"|"reject"|"duck", info)
         self.stats = {"interrupts": 0, "rejected": 0, "accepted_while_quiet": 0}
         self._q: queue.Queue[np.ndarray] = queue.Queue()
@@ -182,6 +183,8 @@ class FilteredAgentAudio(AudioInterface):
         self.engine = None  # start() 里才建（SDK 在它自己的线程里调 start）
         self.started = threading.Event()
         self.muted = False  # 用户在说话 / 按了 Stop：丢掉 Agent 发过来的声音
+        self.sent_voice_frames = 0  # 调试：这次收音实际发出去多少帧非静音声音
+        self.sent_voice_sumsq = 0.0
         self.on_first_audio = None  # 计时：用户说完后 Agent 的第一段声音开始播放时回调（音频线程里）
         self.await_first_audio = False
 
@@ -189,7 +192,7 @@ class FilteredAgentAudio(AudioInterface):
     def start(self, input_callback):
         self._send = input_callback
         self.vad = SileroVAD()
-        self.engine = open_engine()
+        self.engine = open_engine() if self.use_aec else SDEngine()
         self._running = True
         self._worker = threading.Thread(target=self._loop, name="voice-filter", daemon=True)
         self._worker.start()
@@ -266,7 +269,10 @@ class FilteredAgentAudio(AudioInterface):
             print(f"[voice] 拒绝 #{self.stats['rejected']}（分数 {out.score:.3f}）", flush=True)
             self.on_event("reject", out.score)
         if out.send:
-            self._send((np.clip(np.concatenate(out.send), -1, 1) * 32767).astype(np.int16).tobytes())
+            chunk = np.concatenate(out.send)
+            self.sent_voice_frames += len(out.send)
+            self.sent_voice_sumsq += float((chunk ** 2).sum())
+            self._send((np.clip(chunk, -1, 1) * 32767).astype(np.int16).tobytes())
         else:
             self._send(silence)  # 不发声音时发静音帧，保持连接
 

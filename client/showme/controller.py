@@ -707,11 +707,13 @@ class Controller(QObject):
 
     def _on_agent_user(self, text: str):
         self._timing("transcript")
+        print(f"[agent] 🧑 转写：{text!r}", flush=True)
         self.panel.add_message("user", text)
         self._remember("user", text)
 
     def _on_agent_reply(self, text: str):
         self._timing("reply")
+        print(f"[agent] 🤖 回复：{text!r}", flush=True)
         if text.strip():
             self.panel.add_message("assistant", text)
             self._remember("assistant", text)
@@ -841,18 +843,18 @@ class Controller(QObject):
             return
         self._talking = True
         self._turn = None
+        if self.agent.audio:
+            self.agent.audio.sent_voice_frames, self.agent.audio.sent_voice_sumsq = 0, 0.0
         if self.agent.audio:  # Agent 正在说话 → 立刻停掉本地播放，用户说话期间丢掉它的声音
             self.agent.audio.silence_now()
         self._set_talking(True)
         self.talk_timer.start(TALK_MAX_S * 1000)
         delay = _play_sound("Tink")  # 提示音不走回声消除：放完再开始发麦克风声音，免得被当成用户说的话
+        # 不用定时器（按键回调来自 NSEvent，联调时 QTimer 没触发 → 一帧都没发出去）：立刻打开，但提示音放完前先不发
         gate = self.agent.gate
-        QTimer.singleShot(int(delay * 1000) + 60, lambda: self._open_mic(gate))
-        print("[voice] 收音 开始", flush=True)
-
-    def _open_mic(self, gate):
-        if self._talking and self.agent and self.agent.gate is gate:
-            gate.key_down = True
+        gate.open_at = time.monotonic() + delay + 0.06
+        gate.key_down = True
+        print(f"[voice] 收音 开始（{delay + 0.06:.2f}s 后开始发声音）", flush=True)
 
     def end_talk(self, why: str = ""):
         if not self._talking:
@@ -867,7 +869,16 @@ class Controller(QObject):
         self._turn = {"end": time.perf_counter()}
         self._set_talking(False)
         _play_sound("Pop")
-        print(f"[voice] 收音 结束（{why}）", flush=True)
+        a = self.agent.audio if self.agent else None
+        if a:
+            import math
+            n = a.sent_voice_frames
+            rms = math.sqrt(a.sent_voice_sumsq / max(1, n * 512))
+            db = 20 * math.log10(rms + 1e-9)
+            print(f"[voice] 收音 结束（{why}）：发给 Agent {n * 0.032:.1f} 秒声音，音量 {db:.1f} dBFS"
+                  f"{'  ⚠️ 几乎是静音——麦克风没收到声音？' if n and db < -50 else ''}{'  ⚠️ 一帧都没发出去' if not n else ''}", flush=True)
+        else:
+            print(f"[voice] 收音 结束（{why}）：⚠️ Agent 没连上", flush=True)
 
     def _set_talking(self, on: bool):
         if not on:

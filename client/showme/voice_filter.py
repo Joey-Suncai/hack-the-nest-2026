@@ -150,8 +150,9 @@ class Gate:
         self.confirm_frames = max(1, round(confirm_s / FRAME_S))
         self.end_frames = max(1, round(end_s / FRAME_S))
         self.filter_enabled = True  # 面板「声纹过滤」
-        self.push_to_talk = False  # 面板「按住说话」
+        self.push_to_talk = False  # 按键说话模式
         self.key_down = False
+        self.open_at = 0.0  # 按键说话：这个时刻（time.monotonic）之前先不发——等提示音放完，免得被当成用户说的话
         self.log = log
         self._reset()
 
@@ -173,7 +174,7 @@ class Gate:
     def feed(self, frame: np.ndarray, vad_prob: float, agent_speaking: bool) -> GateOut:
         out = GateOut()
         if self.push_to_talk:
-            if self.key_down:
+            if self.key_down and time.monotonic() >= self.open_at:
                 out.send.append(frame)
             return out
         speech = vad_prob >= self.vad_threshold
