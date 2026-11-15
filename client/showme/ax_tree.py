@@ -27,9 +27,10 @@ BUDGET_S = 0.15
 NAME_MAX = 60
 TIMEOUT_S = 0.3  # 每次 AX 调用最多等多久（默认 6 秒，App 卡住会拖住我们）
 SKIP_APPS = {"showme", "python", "terminal", "claude"}  # 「最前面的 App」里跳过这些
-DIALOG_SUBROLES = {"AXDialog", "AXSystemDialog", "AXFloatingWindow"}
 COLLAPSIBLE_ROLES = {"AXDisclosureTriangle", "AXOutline"}  # 折叠后子元素真的不在屏幕上的控件
 CLIP_ROLES = {"AXRow", "AXCell"}  # 只有这些会滚出窗口，要按窗口框裁
+# AXStaticText 只在这些容器里、或者在不是主窗口的小窗口（弹出列表 / 下拉框）里才收：否则每个标签都进来，列表会被刷满
+TEXT_PARENT_ROLES = {"AXList", "AXTable", "AXOutline", "AXMenu"}
 NAME_ATTRS = ("AXTitle", "AXDescription", "AXValue", "AXHelp", "AXPlaceholderValue")
 # 每个节点一次 IPC 取完
 _ATTRS = ["AXRole", "AXSubrole", "AXPosition", "AXSize", "AXChildren", "AXHidden", "AXExpanded", "AXSelected",
@@ -246,7 +247,8 @@ class _Walker:
         if r is not None and rect_ok(r, self.sw, self.sh, clip):
             self.out.append((role, self.name(d), to_box(r, self.sw, self.sh)))
 
-    def walk(self, el, depth: int = 0, clip: Rect | None = None, children: bool = True):
+    def walk(self, el, depth: int = 0, clip: Rect | None = None, children: bool = True, text: bool = False):
+        """text：这一层的 AXStaticText 也收（在列表 / 表格 / 菜单里，或者在弹出的小窗口里）。"""
         if depth > MAX_DEPTH or self.over():
             return
         self.nodes += 1
@@ -254,8 +256,9 @@ class _Walker:
         if not d or d.get("AXHidden") is True:
             return
         role = str(d.get("AXRole") or "")
-        if role in ROLES:
+        if role in ROLES or (text and role == "AXStaticText"):
             self.add(role, d, clip)
+        text = text or role in TEXT_PARENT_ROLES
         # Chromium / Electron（Chrome、VS Code）把普通按钮、容器也报成 AXExpanded=False，
         # 只有真正能折叠的控件才认这个标记，否则整个窗口都读不进来（实测 VS Code 53 个只剩 0 个）
         if not children or (d.get("AXExpanded") is False and role in COLLAPSIBLE_ROLES):
@@ -263,16 +266,41 @@ class _Walker:
         if role == "AXMenuBarItem" and d.get("AXSelected") is not True:
             return  # 没打开的菜单：里面的菜单项不在屏幕上
         for c in d.get("AXChildren") or []:
-            self.walk(c, depth + 1, clip)
+            self.walk(c, depth + 1, clip, text=text)
 
-    def window(self, w):
+    def window(self, w, main: bool = True):
+        """main=False：弹出列表 / 下拉框 / 对话框这类别的窗口，里面的 AXStaticText 也收。"""
         d = self.attrs(w, ["AXPosition", "AXSize", "AXMinimized"])
         if d.get("AXMinimized") is True:
             return
         r = self.rect(d)
         if r is None or not rect_ok(r, self.sw, self.sh):
             return
-        self.walk(w, 0, clip=r)
+        self.walk(w, 0, clip=r, text=not main)
+
+    def other_windows(self, windows: list, focused) -> tuple[list, list]:
+        """除了聚焦窗口之外、屏幕上的其它窗口（任何 subrole：弹出列表、下拉框、对话框……），按面积从小到大。
+        返回 (比聚焦窗口小的, 不比它小的)：小的在聚焦窗口之前读，大的（比如 Chrome 另一个窗口）最后有时间再读。"""
+        fa = None
+        if focused is not None:
+            fr = self.rect(self.attrs(focused, ["AXPosition", "AXSize"]))
+            fa = fr[2] * fr[3] if fr else None
+        seen, sized = [], []
+        for w in windows:
+            if self.over():
+                break
+            if w is None or (focused is not None and w == focused) or any(w == s for s in seen):
+                continue
+            seen.append(w)
+            d = self.attrs(w, ["AXPosition", "AXSize", "AXMinimized"])
+            r = self.rect(d) if d.get("AXMinimized") is not True else None
+            if r is None or not rect_ok(r, self.sw, self.sh):
+                continue
+            sized.append((r[2] * r[3], len(sized), w))
+        sized.sort(key=lambda e: (e[0], e[1]))
+        small = [w for a, _, w in sized if fa is None or a < fa]
+        big = [w for a, _, w in sized if fa is not None and a >= fa]
+        return small, big
 
 
 def _ensure_setup(AX, app, pid: int):
@@ -320,11 +348,15 @@ def _collect(app_name: str | None, screen_wh: tuple[float, float] | None) -> tup
     d = wk.attrs(app, ["AXFocusedWindow", "AXMainWindow", "AXWindows", "AXChildren", "AXMenuBar"])
     focused = d.get("AXFocusedWindow") or d.get("AXMainWindow")
     # 1. 打开着的右键菜单 / 弹出菜单（App 的直接子元素）
+    kids = []
     for c in d.get("AXChildren") or []:
         if wk.over():
             break
-        if wk.attr(c, "AXRole") == "AXMenu":
+        role = wk.attr(c, "AXRole")
+        if role == "AXMenu":
             wk.walk(c, 0)
+        elif role == "AXWindow":
+            kids.append(c)
     # 2. 菜单栏：顶层项（正打开的那个菜单会往下走）
     bar = d.get("AXMenuBar")
     if bar is not None:
@@ -332,17 +364,20 @@ def _collect(app_name: str | None, screen_wh: tuple[float, float] | None) -> tup
             if wk.over():
                 break
             wk.walk(item, 1)
-    # 3. 这个 App 在屏幕上的对话框 / 浮动窗口（不是聚焦的那个）
-    for w in d.get("AXWindows") or []:
+    # 3. 这个 App 在屏幕上的其它窗口（不只对话框：Zoom 的时间下拉列表是单独的小窗口），小的先读
+    small, big = wk.other_windows(list(d.get("AXWindows") or []) + kids, focused)
+    for w in small:
         if wk.over():
             break
-        if focused is not None and w == focused:
-            continue
-        if wk.attr(w, "AXSubrole") in DIALOG_SUBROLES or wk.attr(w, "AXModal") is True:
-            wk.window(w)
+        wk.window(w, main=False)
     # 4. 聚焦的窗口（没有就主窗口），里面的 sheet 也在它的子元素里
     if focused is not None:
         wk.window(focused)
+    # 5. 不比聚焦窗口小的别的窗口（另一个文档窗口）：还有时间才读，当主窗口对待（不收标签）
+    for w in big:
+        if wk.over():
+            break
+        wk.window(w)
     return name, finalize(wk.out)
 
 
@@ -360,3 +395,50 @@ def collect(app_name: str | None, screen_wh: tuple[float, float] | None = None, 
     if log:
         print(_last_stats, flush=True)
     return els
+
+
+# ================= 焦点（/api/next-step 的 confirmed.detail）=================
+FOCUS_BUDGET_S = 0.05
+
+
+def focus_info(app_name: str | None) -> tuple[str | None, str | None, str | None] | None:
+    """目标 App 现在聚焦的控件 (role, name) 和聚焦窗口的标题。没权限 / 出错 / 超时 → None。永不抛异常。"""
+    try:
+        import ApplicationServices as AX
+
+        t0 = time.perf_counter()
+        if not AX.AXIsProcessTrusted():
+            return None
+        tgt = _target(app_name)
+        if tgt is None:
+            return None
+        app = AX.AXUIElementCreateApplication(tgt[0])
+        _ensure_setup(AX, app, tgt[0])
+        wk = _Walker(AX, (1, 1), t0 + FOCUS_BUDGET_S)
+        d = wk.attrs(app, ["AXFocusedUIElement", "AXFocusedWindow"])
+        role = name = title = None
+        el = d.get("AXFocusedUIElement")
+        if el is not None and not wk.over():
+            fd = wk.attrs(el, ["AXRole", *NAME_ATTRS, "AXTitleUIElement"])
+            role = str(fd.get("AXRole") or "") or None
+            name = wk.name(fd)
+        win = d.get("AXFocusedWindow")
+        if win is not None and not wk.over():
+            v = wk.attr(win, "AXTitle")
+            title = " ".join(v.split())[:NAME_MAX] if isinstance(v, str) and v.strip() else None
+        return role, name, title
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def focus_detail(info, prev_title: str | None) -> str | None:
+    """focus_info 的结果 → "focused AXComboBox '开始时间'"、"new window 'Google Calendar'"（和上一次请求时的窗口标题不一样）。"""
+    if not info:
+        return None
+    role, name, title = info
+    parts = []
+    if role:
+        parts.append(f"focused {role}" + (f" {name!r}" if name else ""))
+    if title and prev_title is not None and title != prev_title:
+        parts.append(f"new window {title!r}")
+    return "; ".join(parts) or None

@@ -13,6 +13,7 @@ import re
 import time
 
 RETURN_KEYCODES = (36, 76)  # Return、小键盘 Enter
+TAB_KEYCODE = 48
 
 # 打字步骤：要用户输入内容（只认回车，或者用户说 "done"）
 _TYPING_WORDS = re.compile(r"\b(type|typing|paste|write|fill in|enter (the|your|a|an)|press (enter|return))\b|输入|粘贴|填写|回车", re.IGNORECASE)
@@ -84,7 +85,7 @@ class TypingTracker:
 
 
 class InputWatcher:
-    """装 NSEvent 监听：on_click(x, y)（左上角原点逻辑点，只有点别的 App 时）、on_key(is_return)。都在主线程回调。"""
+    """装 NSEvent 监听：on_click(x, y)（左上角原点逻辑点，只有点别的 App 时）、on_key(is_return, is_tab)。都在主线程回调。"""
 
     def __init__(self, on_click, on_key):
         self.on_click, self.on_key = on_click, on_key
@@ -114,7 +115,8 @@ class InputWatcher:
 
             def key(event):
                 try:
-                    self.on_key(int(event.keyCode()) in RETURN_KEYCODES)  # 不读按键内容
+                    code = int(event.keyCode())  # 只看是不是回车 / Tab，不读按键内容
+                    self.on_key(code in RETURN_KEYCODES, code == TAB_KEYCODE)
                 except Exception as e:  # noqa: BLE001
                     print(f"[input] 处理按键出错：{e}", flush=True)
 

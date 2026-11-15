@@ -56,6 +56,8 @@ SETTLE_MIN_S = 0.3
 SETTLE_MAX_S = 1.5  # 画面开始变之后最多再等多久（动画 / 视频一直动也照截）
 # 点完 / 打完画面还一点没变：最多等这么久再截（Zoom「安排会议」窗口 >1.5 s 才弹出，太早截到旧画面 Gemini 会让再点一次）
 SETTLE_NOCHANGE_MAX_S = 5.0
+# 点在框里（或打完字再点别处 / 按 Tab）= 客户端确认做完了：画面没变最多只等这么久（不等 5 秒），请求里带 confirmed
+CLICK_SETTLE_MAX_S = 0.8
 NEAR_CLICK_PT = 40  # 点在框外但离框不超过这么多逻辑点：也算完成（框画偏了；点错了下一步 Gemini 会纠正）
 HIGHLIGHT_COLOR = "#FF2D78"  # 框和光晕的颜色
 BORDER_WIDTH = 4  # 实线边框粗细

@@ -239,7 +239,7 @@ def test_settle_waits_for_change_before_stable(monkeypatch, capsys):
 def test_settle_no_change_gives_up_at_max(monkeypatch, capsys):
     c = _settler(monkeypatch, [0.0] * 400)
     c._last_raw = np.zeros((64, 64), np.float32)
-    c._step_completed("click")
+    c._step_completed("click_near")  # 点在框里的（click）不等慢窗口：见 test_confirmed_click_waits_only_short
     c._settle_tick()
     assert c.fired == []  # 一直没变：不会 0.3 s 就截
     c._settle["t0"] -= ctl.SETTLE_MAX_S
@@ -255,7 +255,7 @@ class FakeClock:
     def __call__(self): return self.t
 
 
-def _sim(monkeypatch, frame_at, reason="click", max_s=10.0):
+def _sim(monkeypatch, frame_at, reason="click_near", max_s=10.0):
     """用假时钟按 SETTLE_POLL_S 一帧帧跑：frame_at(t) = t 秒时截到的画面（灰度值）。返回截正式图的时刻（秒）。"""
     clock = FakeClock()
     monkeypatch.setattr(ctl.time, "monotonic", clock)
