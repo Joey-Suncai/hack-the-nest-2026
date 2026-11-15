@@ -174,7 +174,7 @@ def _signals(monkeypatch, kind, inputs_ok=True, fired=True):
     c._down = None
     c.task, c._token, c.history = {"goal": "x"}, 0, []
     for name in ("_on_click", "_on_mouse_down", "_on_mouse_up", "_click_completes", "_on_key", "_on_poll",
-                 "_screen_only_backup", "_cancel_recheck", "_schedule_miss_recheck", "_miss_recheck_tick", "_user_acted"):
+                 "_screen_only_backup", "_cancel_recheck", "_schedule_miss_recheck", "_miss_recheck_tick", "_user_acted", "_ax_now_vs_req"):
         setattr(c, name, types.MethodType(getattr(Controller, name), c))
     return c, done
 
@@ -403,8 +403,9 @@ def _recheck_ctl(monkeypatch, frames):
                               overlay=types.SimpleNamespace(clear=lambda: log.append("clear")),
                               narrator=types.SimpleNamespace(stop=lambda: log.append("hush")))
     c._request = lambda img=None, front=None: requests.append((img, front, c._confirmed, c.expect))
-    for name in ("_schedule_recheck", "_cancel_recheck", "_recheck_tick"):
+    for name in ("_schedule_recheck", "_cancel_recheck", "_recheck_tick", "_ax_now_vs_req"):
         setattr(c, name, types.MethodType(getattr(Controller, name), c))
+    c._recheck_numbers = Controller._recheck_numbers
     return c, timers, requests, log
 
 
@@ -467,8 +468,9 @@ def _miss_ctl(monkeypatch, frame):
     monkeypatch.setattr(capture, "to_small_gray", lambda img: np.full((64, 64), frame, np.float32))
     c.task, c._token, c.history, c._recheck = {"goal": "x"}, 1, [], None
     c._last_raw = np.zeros((64, 64), np.float32)  # 点之前的画面
-    for name in ("_schedule_miss_recheck", "_miss_recheck_tick"):
+    for name in ("_schedule_miss_recheck", "_miss_recheck_tick", "_ax_now_vs_req"):
         setattr(c, name, types.MethodType(getattr(Controller, name), c))
+    c._recheck_numbers = Controller._recheck_numbers
     return c, done, timers
 
 
@@ -524,3 +526,41 @@ def test_user_acting_when_not_waiting_for_gemini_cancels_recheck(monkeypatch):
     c._user_acted()  # 框已经出来了，用户在做这一步：交给点击逻辑
     timers[0][1]()
     assert requests == [] and len(timers) == 1
+
+
+# ---- 复查的「变没变」：深色模式 + 控件清单 ----
+from showme.change import _diff as _poll_diff, ax_changed, ax_signature, fine_diff  # noqa: E402
+
+
+def _els(n, prefix="cell"):
+    return [{"id": i + 1, "role": "AXButton", "name": f"{prefix} {i}", "box": [0, 0, 1, 1]} for i in range(n)]
+
+
+def test_fine_diff_sees_dark_mode_popup_that_polling_misses():
+    a = np.zeros((64, 64), np.float32)
+    b = a.copy()
+    b.flat[:25] = 0.05  # 深灰弹窗没了：亮度只差 0.05，约 0.6% 的像素
+    assert _poll_diff(a, b) == 0.0  # 轮询的门槛看不出来（日志：diff=0.0039 被当成没变）
+    from showme.config import RECHECK_CHANGE
+    assert fine_diff(a, b) > RECHECK_CHANGE
+
+
+def test_ax_signature_change_detects_popup_close_and_ignores_noise():
+    popup_open = ax_signature(_els(68, "main") + _els(135, "day"))  # 日历弹窗开着：203 个
+    popup_closed = ax_signature(_els(68, "main"))
+    assert ax_changed(popup_open, popup_closed)
+    assert not ax_changed(popup_closed, popup_closed)
+    one_more = ax_signature(_els(68, "main") + [{"role": "AXButton", "name": "tooltip"}])
+    assert not ax_changed(popup_closed, one_more)  # 只多一个（悬停提示）：不算
+    assert not ax_changed(None, popup_closed) and not ax_changed(popup_closed, frozenset())
+
+
+def test_recheck_uses_controls_when_pixels_barely_change(monkeypatch, capsys):
+    c, timers, requests, _ = _recheck_ctl(monkeypatch, [0.0])  # 截图几乎没变
+    c._screen_wh = (1470, 956)
+    c._req_ax = ("Zoom", ax_signature(_els(68, "main") + _els(135, "day")))  # 请求时弹窗开着
+    monkeypatch.setattr(ctl.ax_tree, "collect", lambda app, wh=None, log=True: _els(68, "main"))  # 现在关了
+    c._schedule_recheck("req", None, "old")
+    timers[0][1]()
+    out = capsys.readouterr().out
+    assert len(requests) == 1 and "又变了" in out and "203→68" in out

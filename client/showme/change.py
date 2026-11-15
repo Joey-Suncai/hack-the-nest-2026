@@ -2,7 +2,34 @@
 
 import numpy as np
 
-from showme.config import CHANGE_THRESHOLD, PIXEL_DELTA, STABLE_FRAMES
+from showme.config import (CHANGE_THRESHOLD, PIXEL_DELTA, RECHECK_AX_MIN, RECHECK_AX_RATIO, RECHECK_CHANGE,
+                           RECHECK_PIXEL_DELTA, STABLE_FRAMES)
+
+
+# ---- 复查用（操作后 1.5 s 只比一次，可以比平时的轮询灵敏）----
+def fine_diff(a: np.ndarray, b: np.ndarray) -> float:
+    """比 _diff 灵敏：深色模式里深灰弹窗盖在深灰窗口上，亮度变化不到 PIXEL_DELTA（日志：diff=0.0039，差一点没过）。"""
+    return float((np.abs(a - b) > RECHECK_PIXEL_DELTA).mean())
+
+
+def ax_signature(elements) -> frozenset:
+    """控件清单的「指纹」：(角色, 名字)。弹窗开 / 关、选中状态（名字里常带 'selected'）变了都会反映出来；不看位置。"""
+    try:
+        return frozenset((e.get("role"), e.get("name")) for e in (elements or []) if isinstance(e, dict))
+    except Exception:  # noqa: BLE001
+        return frozenset()
+
+
+def ax_changed(before: frozenset | None, after: frozenset | None) -> bool:
+    """控件明显变了：至少 RECHECK_AX_MIN 个不同，而且占总数 RECHECK_AX_RATIO 以上。读不到（None / 空）就不下结论。"""
+    if not before or not after:
+        return False
+    diff = len(before ^ after)
+    return diff >= RECHECK_AX_MIN and diff / max(1, len(before | after)) >= RECHECK_AX_RATIO
+
+
+def screen_changed(pixel_diff: float, ax_before: frozenset | None, ax_after: frozenset | None) -> bool:
+    return pixel_diff > RECHECK_CHANGE or ax_changed(ax_before, ax_after)
 
 
 def _diff(a: np.ndarray, b: np.ndarray) -> float:

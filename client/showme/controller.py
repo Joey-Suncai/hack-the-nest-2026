@@ -26,7 +26,7 @@ from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
 from showme import api, apps, ax_snap, ax_tree, capture, enroll, ocr, reasoning, sync, wording
-from showme.change import ChangeDetector, _diff, mask_rects
+from showme.change import ChangeDetector, _diff, ax_signature, fine_diff, mask_rects, screen_changed
 from showme.config import (AX_ELEMENTS, CHANGE_THRESHOLD, CLICK_EXTRA_PAD, CLICK_SETTLE_MAX_S, DEBUG_DETECT, HIGHLIGHT_PAD, LOG, MIC_MAX_S, POLL_S,
                            RECHECK_AFTER_S, RECHECK_MIN_GAP_S, SETTLE_MAX_S, SETTLE_MIN_S, SETTLE_NOCHANGE_MAX_S, SETTLE_POLL_S, TALK_MAX_S)
 from showme.coords import box_to_rect, expand, same_target
@@ -509,6 +509,7 @@ class Controller(QObject):
         if not AX_ELEMENTS:
             return
         els = ax_tree.collect(app, self._screen_wh)
+        self._req_ax = (app, ax_signature(els))  # 复查时和现在的控件比：弹窗开 / 关、选中状态变了都看得出来
         if els:
             payload["elements"] = els
 
@@ -1021,16 +1022,35 @@ class Controller(QObject):
             return
         try:
             self._grow_masks()
-            d = _diff(self._masked(capture.to_small_gray(capture.grab())), rc["base"])
+            d = fine_diff(self._masked(capture.to_small_gray(capture.grab())), rc["base"])
         except Exception as e:  # noqa: BLE001
             dbg(f"[recheck] 截图失败：{e}")
             return
-        if d <= CHANGE_THRESHOLD:
-            print(f"[recheck] 点在框外，{RECHECK_AFTER_S:.1f} s 后画面没变（diff={d:.4f}）：继续等你点框", flush=True)
+        before, after = self._ax_now_vs_req()
+        how = self._recheck_numbers(d, before, after)
+        if not screen_changed(d, before, after):
+            print(f"[recheck] 点在框外，{RECHECK_AFTER_S:.1f} s 后画面没变（{how}）：继续等你点框", flush=True)
             return
-        print(f"[recheck] 点在框外，但 {RECHECK_AFTER_S:.1f} s 后画面变了（diff={d:.4f}）→ 用最新画面重新看", flush=True)
+        print(f"[recheck] 点在框外，但 {RECHECK_AFTER_S:.1f} s 后画面变了（{how}）→ 用最新画面重新看", flush=True)
         self._last_raw = rc["base"]  # 等画面稳定时，用点之前那一帧当基准
         self._step_completed("click_changed")
+
+    def _ax_now_vs_req(self):
+        """复查用：发请求时读到的控件指纹 vs 现在的。AX 关着 / 读不到 → (None, None)，只看截图。"""
+        req = getattr(self, "_req_ax", None)
+        if not AX_ELEMENTS or not req:
+            return None, None
+        app, before = req
+        try:
+            after = ax_signature(ax_tree.collect(app, self._screen_wh, log=False))
+        except Exception:  # noqa: BLE001
+            after = None
+        return before, after
+
+    @staticmethod
+    def _recheck_numbers(d, before, after) -> str:
+        ax = f"，控件 {len(before)}→{len(after)} 个、{len(before ^ after)} 个不同" if before and after else ""
+        return f"diff={d:.4f}{ax}"
 
     def _recheck_tick(self, rc):
         if getattr(self, "_recheck", None) is not rc:
@@ -1046,14 +1066,16 @@ class Controller(QObject):
         try:
             now = capture.grab()
             self._grow_masks()
-            d = _diff(self._masked(capture.to_small_gray(now)), self._masked(capture.to_small_gray(rc["img"])))
+            d = fine_diff(self._masked(capture.to_small_gray(now)), self._masked(capture.to_small_gray(rc["img"])))
         except Exception as e:  # noqa: BLE001  复查失败不影响主流程
             dbg(f"[recheck] 截图失败：{e}")
             return
-        if d <= CHANGE_THRESHOLD:
-            print(f"[recheck] {RECHECK_AFTER_S:.1f} s 后画面没变（diff={d:.4f}）：刚才那张就是最新的", flush=True)
+        before, after = self._ax_now_vs_req()
+        how = self._recheck_numbers(d, before, after)
+        if not screen_changed(d, before, after):
+            print(f"[recheck] {RECHECK_AFTER_S:.1f} s 后画面没变（{how}）：刚才那张就是最新的", flush=True)
             return
-        print(f"[recheck] 截图之后画面又变了（diff={d:.4f}）：第一张截早了 → 用最新画面重新问", flush=True)
+        print(f"[recheck] 截图之后画面又变了（{how}）：第一张截早了 → 用最新画面重新问", flush=True)
         self._token += 1  # 丢掉按旧画面算的结果（还没回来的那个）
         self._provisional = None
         if self.state == WAITING:  # 旧结果已经显示了：撤掉它
