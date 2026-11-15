@@ -340,6 +340,7 @@ class Controller(QObject):
         self.history, self.expect, self.current, self.last_instruction = [], None, None, None
         self._confirmed, self._last_result, self._recent, self._prev_front, self._typed_keys = None, None, [], None, 0
         self.guide = outline or None
+        self._guide_is_plan = False
         self._n_req = 0
         self.panel.set_running(True)
         self._update_steps()
@@ -670,6 +671,7 @@ class Controller(QObject):
             plan = reasoning.plan_of(r)
             if plan:
                 self.guide = plan
+                self._guide_is_plan = True  # 后端的 plan = 剩下的步骤，第一项就是这一步
                 print(f"[plan] {len(plan)} steps: {plan[0]}…", flush=True)
                 if self.task is not None:
                     self._update_steps()
@@ -942,14 +944,19 @@ class Controller(QObject):
         def got(g):
             if g and g.get("outline") and not self.guide:
                 self.guide = g["outline"]
+                self._guide_is_plan = False
                 self._update_steps()
 
         self._bg(lambda: api.guide(app, goal, lang), got, lambda _e: None)
 
     def _update_steps(self):
         done = [h["instruction"] for h in self.history]
-        n = len(done) + (1 if self.last_instruction else 0)
-        upcoming = (self.guide or [])[n:]
+        if getattr(self, "_guide_is_plan", False):
+            # 后端的 plan 是「剩下的步骤（含这一步）」：后面的步骤从第 2 项开始
+            upcoming = (self.guide or [])[1:]
+        else:  # /api/guide 的大纲是从头开始的完整步骤
+            n = len(done) + (1 if self.last_instruction else 0)
+            upcoming = (self.guide or [])[n:]
         self.panel.set_steps(done, self.last_instruction, upcoming)
 
     # ================= 实时语音（ElevenLabs Agent）=================

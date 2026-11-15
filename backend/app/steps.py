@@ -372,8 +372,10 @@ def refine_box(img: bytes, out: NextStepOut, force: bool = False) -> NextStepOut
 # next-step 的思考量："" = 模型默认；minimal / low / medium / high
 # 评测：default 93% / 4.4s，low 93% / 2.2s，minimal 85% / 1.3s → 默认 low
 THINKING = os.getenv("NEXT_STEP_THINKING", "low").strip().lower() or None
-# 需要真正推理的时候（第一步、换了 App、上一步没成功、用户说了话、客户端要求）多想一点
-DEEP_THINKING = os.getenv("NEXT_STEP_DEEP_THINKING", "medium").strip().lower() or None
+# 需要真正推理的时候（第一步、换了 App、上一步没成功、用户说了话、客户端要求）可以多想一点。
+# 默认仍是 low：评测里 medium 平均 8.2 s/步，low 下 4 个推理用例照样 4/4、平均 2.9 s（推理主要靠 prompt）。
+# 想更深就设 NEXT_STEP_DEEP_THINKING=medium
+DEEP_THINKING = os.getenv("NEXT_STEP_DEEP_THINKING", "low").strip().lower() or None
 LAST_TIMING: dict[str, float] = {}  # 最近一次 next_step 各阶段耗时（毫秒），评测脚本读
 LAST_THINKING: dict[str, str | None] = {}  # 最近一次用的思考量和原因，评测脚本读
 
