@@ -44,6 +44,91 @@ def apply_macos_window_settings(widget: QWidget, level: int | None = None, click
         print(f"[overlay] macOS 窗口设置失败：{e}")
 
 
+def order_front_without_activating(widget: QWidget) -> None:
+    """把窗口提到同层最前，但不激活 ShowMe、不让窗口变成 key window。
+
+    不能用 QWidget.raise_()：Qt 在 macOS 上 raise 会顺带 activateIgnoringOtherApps（QT_MAC_SET_RAISE_PROCESS），
+    用户正在用的 App 就失去焦点 —— Zoom「安排会议」这类窗口一失焦就自己关掉。"""
+    if QApplication.platformName() != "cocoa" or not widget.isVisible():
+        return
+    try:
+        import objc
+
+        objc.objc_object(c_void_p=int(widget.winId())).window().orderFrontRegardless()
+    except Exception as e:  # noqa: BLE001
+        print(f"[overlay] 置前失败：{e}", flush=True)
+
+
+def make_accessory_app() -> bool:
+    """不显示 Dock 图标的「辅助 App」：macOS 才会把我们的窗口显示在别的桌面 / 全屏 App 上
+    （普通 App 的窗口不会跟过去，CanJoinAllSpaces 不起作用）。要在建任何窗口之前调用。"""
+    if QApplication.platformName() != "cocoa":
+        return False
+    try:
+        from AppKit import NSApplication, NSApplicationActivationPolicyAccessory
+
+        NSApplication.sharedApplication().setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+        return True
+    except Exception as e:  # noqa: BLE001
+        print(f"[overlay] 设置辅助 App 失败：{e}", flush=True)
+        return False
+
+
+def activate_app() -> None:
+    """辅助 App 默认不会抢焦点：用户点面板要打字时，主动激活。"""
+    if QApplication.platformName() != "cocoa":
+        return
+    try:
+        from AppKit import NSApplication
+
+        NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+    except Exception as e:  # noqa: BLE001
+        print(f"[overlay] 激活失败：{e}", flush=True)
+
+
+_space_observer = None  # 要一直持有引用，否则会被回收
+
+
+def watch_space_changes(callback) -> bool:
+    """切换桌面（Space）/ 进出全屏时回调，用来重新设置窗口。"""
+    global _space_observer
+    if QApplication.platformName() != "cocoa":
+        return False
+    try:
+        import objc
+        from AppKit import NSWorkspace, NSWorkspaceActiveSpaceDidChangeNotification
+        from Foundation import NSObject
+
+        class _SpaceObserver(NSObject):
+            def spaceChanged_(self, note):
+                try:
+                    callback()
+                except Exception as e:  # noqa: BLE001
+                    print(f"[overlay] 切换桌面回调出错：{e}", flush=True)
+
+        _space_observer = _SpaceObserver.alloc().init()
+        NSWorkspace.sharedWorkspace().notificationCenter().addObserver_selector_name_object_(
+            _space_observer, objc.selector(_SpaceObserver.spaceChanged_, signature=b"v@:@"),
+            NSWorkspaceActiveSpaceDidChangeNotification, None)
+        return True
+    except Exception as e:  # noqa: BLE001
+        print(f"[overlay] 监听切换桌面失败：{e}", flush=True)
+        return False
+
+
+def _flush_core_animation() -> None:
+    """repaint() 画进的内容要等 Core Animation 事务提交才送到 WindowServer；主线程接着 sleep + 截图时
+    事件循环没转，可能截到旧内容。手动提交一次。"""
+    if QApplication.platformName() != "cocoa":
+        return
+    try:
+        from Quartz import CATransaction
+
+        CATransaction.flush()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 class Overlay(QWidget):
     def __init__(self):
         super().__init__()
@@ -70,6 +155,9 @@ class Overlay(QWidget):
         self._caption_font.setPixelSize(C.CAPTION_FONT_SIZE)
         self._caption_font.setWeight(QFont.Weight.Medium)
 
+        self._badge = ""  # 「Listening…」标签（收音时显示在屏幕下方中间：用户看着 VS Code，不一定看面板）
+        self._badge_rect: QRect | None = None
+
         self._clock = QElapsedTimer()
         self._clock.start()
         self._anim = QTimer(self)
@@ -77,6 +165,20 @@ class Overlay(QWidget):
 
         self.show()
         apply_macos_window_settings(self, click_through=True)
+        self._exclude_from_capture()
+
+    def _exclude_from_capture(self) -> None:
+        """截图时让 WindowServer 直接不合成这个窗口（见 capture.EXCLUDE_WINDOW_IDS）。"""
+        if QApplication.platformName() != "cocoa":
+            return
+        try:
+            import objc
+
+            from showme import capture
+
+            capture.exclude_window(objc.objc_object(c_void_p=int(self.winId())).window().windowNumber())
+        except Exception as e:  # noqa: BLE001
+            print(f"[overlay] 截图排除高亮层失败（只靠清空重绘）：{e}", flush=True)
 
     # ---- 对外接口 ----
     def show_target(self, rect: tuple[int, int, int, int], text: str) -> None:
@@ -102,6 +204,21 @@ class Overlay(QWidget):
         self._caption_rect = self._layout_caption()
         self.update(self._caption_rect.united(old) if old else self._caption_rect)
 
+    def show_badge(self, text: str) -> None:
+        old = self._badge_rect
+        self._badge = text
+        fm = QFontMetrics(self._caption_font)
+        w, h = fm.horizontalAdvance(text) + 64, C.CAPTION_FONT_SIZE + 26
+        screen = self.rect()
+        self._badge_rect = QRect(screen.center().x() - w // 2, screen.bottom() - C.CAPTION_BOTTOM - h, w, h)
+        self.update(self._badge_rect.united(old) if old else self._badge_rect)
+
+    def clear_badge(self) -> None:
+        old = self._badge_rect
+        self._badge, self._badge_rect = "", None
+        if old:
+            self.update(old)
+
     def clear_caption(self) -> None:
         old = self._caption_rect
         self._caption, self._caption_rect = "", None
@@ -112,12 +229,25 @@ class Overlay(QWidget):
         """框（含光晕）、气泡和字幕占用的区域，给画面变化检测做遮罩。"""
         out = []
         if self._rect is not None:
+            # 只遮发光边框那一圈（框外扩 g、框内缩 inset），框里面照常参与比较：
+            # 点输入框后唯一的变化（光标、边框变色）就在框里面
             g = C.GLOW_SIZE + C.BORDER_WIDTH
-            out.append(self._rect.adjusted(-g, -g, g, g))
+            inset = (C.GLOW_SIZE + C.BORDER_WIDTH) // 2 + 2  # 描边有一半画在框内
+            outer = self._rect.adjusted(-g, -g, g, g)
+            inner = self._rect.adjusted(inset, inset, -inset, -inset)
+            if inner.width() <= 0 or inner.height() <= 0:
+                out.append(outer)
+            else:
+                out += [QRect(outer.left(), outer.top(), outer.width(), inner.top() - outer.top()),       # 上
+                        QRect(outer.left(), inner.bottom() + 1, outer.width(), outer.bottom() - inner.bottom()),  # 下
+                        QRect(outer.left(), inner.top(), inner.left() - outer.left(), inner.height()),    # 左
+                        QRect(inner.right() + 1, inner.top(), outer.right() - inner.right(), inner.height())]  # 右
         if self._bubble is not None:
             out.append(self._bubble.adjusted(-4, -4, 4, 4))
         if self._caption_rect is not None:
             out.append(self._caption_rect.adjusted(-8, -8, 8, 8))
+        if self._badge_rect is not None:
+            out.append(self._badge_rect.adjusted(-8, -8, 8, 8))
         return [(r.x(), r.y(), r.width(), r.height()) for r in out]
 
     @contextmanager
@@ -127,11 +257,12 @@ class Overlay(QWidget):
         不用 hide()：macOS 隐藏窗口有淡出动画，截图里会留下上一步光圈 / 气泡的残影（联调时发现的）。
         清空内容 + 立即重绘没有动画。
         """
-        saved = (self._rect, self._text, self._bubble, self._caption, self._caption_rect)
-        self._rect = self._bubble = self._caption_rect = None
-        self._text = self._caption = ""
+        saved = (self._rect, self._text, self._bubble, self._caption, self._caption_rect, self._badge, self._badge_rect)
+        self._rect = self._bubble = self._caption_rect = self._badge_rect = None
+        self._text = self._caption = self._badge = ""
         self._anim.stop()
         self.repaint()
+        _flush_core_animation()  # 后备（排除窗口失败时）：立刻提交重绘，别等事件循环
         QApplication.processEvents()
         time.sleep(C.HIDE_WAIT_S)
         try:
@@ -142,6 +273,8 @@ class Overlay(QWidget):
                 self._rect, self._text, self._bubble = saved[:3]
             if self._caption_rect is None and not self._caption:
                 self._caption, self._caption_rect = saved[3], saved[4]
+            if self._badge_rect is None and not self._badge:
+                self._badge, self._badge_rect = saved[5], saved[6]
             if self._rect is not None and C.BREATHE_MS > 0:
                 self._anim.start(33)
             self.update()
@@ -202,6 +335,20 @@ class Overlay(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         if self._caption_rect is not None:
             self._paint_caption(p)
+        if self._badge_rect is not None:
+            r = self._badge_rect
+            p.setPen(Qt.PenStyle.NoPen)
+            bg = QColor(0, 0, 0)
+            bg.setAlphaF(0.8)
+            p.setBrush(bg)
+            p.drawRoundedRect(QRectF(r), r.height() / 2, r.height() / 2)
+            p.setBrush(QColor("#FF3B30"))
+            d = 12
+            p.drawEllipse(QRectF(r.x() + 20, r.center().y() - d / 2, d, d))
+            p.setPen(QColor("#FFFFFF"))
+            p.setFont(self._caption_font)
+            p.drawText(r.adjusted(40, 0, -16, 0), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self._badge)
+            p.setBrush(Qt.BrushStyle.NoBrush)
         if self._rect is None:
             p.end()
             return

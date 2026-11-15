@@ -8,11 +8,17 @@ DEMO_GOAL = "Clone the GitHub repo https://github.com/octocat/Hello-World"
 
 # ---- 实时语音的麦克风过滤（voice_filter.py）----
 VAD_THRESHOLD = 0.5  # Silero 人声概率超过多少算「有人在说话」
-VOICE_THRESHOLD = 0.5  # 声纹余弦相似度超过多少算「是本人」（实测后调整）
+VOICE_THRESHOLD = 0.6  # 声纹余弦相似度超过多少算「是我们」。安静处录的声纹：本人 0.61–0.77（中位 0.72），外放回声连 VAD 都过不了；嘈杂处旁边人声曾到 0.58（旧声纹）→ 现场要再测
 VOICE_CONFIRM_S = 0.5  # 累计多少秒人声后做一次声纹判断（这段时间先压低 ShowMe 的音量）
 VOICE_END_S = 0.6  # 连续多少秒没人声算这段话结束
 DUCK_VOLUME = 0.3  # 检测到人声时 ShowMe 播放音量压到多少
 PTT_KEY = "space"  # 「按住说话」用的键
+TAP_TO_TALK_DEFAULT = True
+VOICE_FILTER_DEFAULT = False  # 按键说话模式下不做 VAD / 声纹；开关保留，默认关（实测陌生人 0.67 vs 我们 0.61，分不开）
+TALK_MAX_S = 30  # 忘了按结束，最长收音 30 秒
+# 实时语音用不用 macOS 语音处理（回声消除）。按键说话时 Agent 的声音在用户说话期间是静音的，没有回声，不需要；
+# 而且联调发现：从「终端」启动时 AVAudioEngine 语音处理的麦克风一直没有数据（sounddevice 正常）
+USE_AEC = False  # 默认「点按收音」：现场太吵，免提时 VAD / 声纹连我们自己的声音都挡（联调实测）
 
 # ---- 语音输入 ----
 MIC_RATE = 16000  # /api/transcribe 要 16 kHz 单声道 WAV
@@ -20,6 +26,7 @@ MIC_MAX_S = 30  # 最长录多久，到点自动结束
 
 # ---- 调试记录：SHOWME_LOG=1 时，每一步的截图和后端返回存到 client/logs/<时间>/ ----
 LOG = os.getenv("SHOWME_LOG") == "1"
+DEBUG_DETECT = os.getenv("SHOWME_DEBUG_DETECT") == "1"  # 画面变化检测的详细日志（排查「点了检测不到」）
 
 # ---- 后端 ----
 API_BASE = os.getenv("SHOWME_API", "http://localhost:8000")
@@ -38,6 +45,15 @@ STABLE_FRAMES = 1  # 变化后连续几帧不动，才算用户这一步做完�
 
 # ---- 高亮样式（光圈）----
 HIGHLIGHT_PAD = 12  # 框比目标元素四周大多少（逻辑像素）
+CLICK_EXTRA_PAD = 8  # 判断「点在框里」时，画出来的框四周再放宽多少
+# 这一步做完了（点击 / 画面变化 / 打字）→ 先等画面稳定再截图发给后端：每 SETTLE_POLL_S 截一张缩略图，
+# 先等画面和做之前比变了，再连续 2 张 diff ≤ CHANGE_THRESHOLD 才截；至少等 SETTLE_MIN_S；画面一直没变最多等 SETTLE_NOCHANGE_MAX_S，开始变之后最多再等 SETTLE_MAX_S
+SETTLE_POLL_S = 0.1
+SETTLE_MIN_S = 0.3
+SETTLE_MAX_S = 1.5  # 画面开始变之后最多再等多久（动画 / 视频一直动也照截）
+# 点完 / 打完画面还一点没变：最多等这么久再截（Zoom「安排会议」窗口 >1.5 s 才弹出，太早截到旧画面 Gemini 会让再点一次）
+SETTLE_NOCHANGE_MAX_S = 5.0
+NEAR_CLICK_PT = 40  # 点在框外但离框不超过这么多逻辑点：也算完成（框画偏了；点错了下一步 Gemini 会纠正）
 HIGHLIGHT_COLOR = "#FF2D78"  # 框和光晕的颜色
 BORDER_WIDTH = 4  # 实线边框粗细
 CORNER_RADIUS = 10  # 圆角

@@ -17,6 +17,7 @@ dependencies = [
     "pyobjc-framework-avfoundation>=10.3",
     "onnxruntime>=1.32.0",
     "sherpa-onnx>=2.0.1",
+    "pyobjc-framework-applicationservices>=10.3",
 ]
 
 [dependency-groups]

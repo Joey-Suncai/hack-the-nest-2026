@@ -20,3 +20,31 @@ def test_jpeg_b64_keeps_small_image():
 def test_small_gray_shape_and_range():
     a = to_small_gray(Image.new("RGB", (2880, 1800), "white"))
     assert a.shape == (64, 64) and float(a.max()) <= 1.0
+
+
+def test_grab_uses_window_exclusion_when_registered(monkeypatch):
+    from showme import capture
+
+    seen = []
+    monkeypatch.setattr(capture, "EXCLUDE_WINDOW_IDS", {42})
+    monkeypatch.setattr(capture, "_grab_excluding", lambda ex: seen.append(set(ex)) or Image.new("RGB", (10, 10)))
+    assert capture.grab().size == (10, 10) and seen == [{42}]
+
+
+def test_grab_falls_back_when_exclusion_fails(monkeypatch):
+    from showme import capture
+
+    monkeypatch.setattr(capture, "EXCLUDE_WINDOW_IDS", {42})
+    monkeypatch.setattr(capture, "_grab_excluding", lambda ex: None)
+
+    class FakeShot:
+        size, bgra = (4, 2), b"\0" * 32
+
+    class FakeMSS:
+        monitors = [None, None]
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def grab(self, mon): return FakeShot()
+
+    monkeypatch.setattr(capture.mss, "MSS", FakeMSS, raising=False)
+    assert capture.grab().size == (4, 2)

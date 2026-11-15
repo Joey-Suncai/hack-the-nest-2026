@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -25,7 +26,7 @@ from PyQt6.QtWidgets import (
 
 from showme import i18n
 from showme.i18n import t
-from showme.overlay import apply_macos_window_settings
+from showme.overlay import activate_app, apply_macos_window_settings
 
 ACCENT = "#FF2D78"
 PANEL_W, PANEL_H = 360, 600
@@ -58,6 +59,8 @@ QPushButton:hover {{ background: #48484A; }}
 QPushButton#send {{ background: {ACCENT}; font-weight: 600; }}
 QPushButton#send:hover {{ background: #FF4D8D; }}
 QPushButton#mic[recording="true"] {{ background: #FF3B30; }}
+QPushButton#small {{ padding: 4px 8px; font-size: 12px; }}
+QCheckBox#small {{ font-size: 12px; color: #C7C7CC; }}
 QPushButton:disabled {{ color: #8E8E93; background: #2C2C2E; }}
 """
 
@@ -68,6 +71,8 @@ class _FocusWatcher(QObject):
         self.on_change = on_change
 
     def eventFilter(self, obj, ev):
+        if ev.type() == QEvent.Type.MouseButtonPress:
+            activate_app()  # 辅助 App 不抢焦点：点输入框时主动激活，才能打字
         if ev.type() == QEvent.Type.FocusIn:
             self.on_change(True)
         elif ev.type() == QEvent.Type.FocusOut:
@@ -81,6 +86,10 @@ class Panel(QWidget):
     input_focus_changed = pyqtSignal(bool)
     stop_requested = pyqtSignal()
     retry_requested = pyqtSignal()
+    live_toggled = pyqtSignal(bool)  # 实时语音（ElevenLabs Agent）开 / 关
+    filter_toggled = pyqtSignal(bool)  # 声纹过滤开 / 关
+    tap_toggled = pyqtSignal(bool)  # 点按收音（点一下开始、再点一下结束）开 / 关
+    enroll_requested = pyqtSignal(str)  # 录入谁的声音
 
     def __init__(self):
         super().__init__()
@@ -105,6 +114,27 @@ class Panel(QWidget):
         top.addStretch()
         top.addWidget(self.voice_box)
         top.addWidget(self.lang_box)
+
+        # ---- 实时语音：开关 + 保底开关 + 录声纹 ----
+        self.live_box = QCheckBox()
+        self.filter_box = QCheckBox()
+        self.tap_box = QCheckBox()
+        for b in (self.live_box, self.filter_box, self.tap_box):
+            b.setObjectName("small")
+        self.live_box.setChecked(True)
+        from showme.config import VOICE_FILTER_DEFAULT
+        self.filter_box.setChecked(VOICE_FILTER_DEFAULT)
+        from showme.config import TAP_TO_TALK_DEFAULT
+        self.tap_box.setChecked(TAP_TO_TALK_DEFAULT)
+        self.enroll_btn = QPushButton()
+        self.enroll_btn.setObjectName("small")
+        live_row = QHBoxLayout()
+        live_row.addWidget(self.live_box)
+        live_row.addWidget(self.filter_box)
+        live_row.addWidget(self.tap_box)
+        self.tap_box.hide()  # 现在固定是「按键说话」（右 Option / 麦克风按钮），不再需要这个开关
+        live_row.addStretch()
+        live_row.addWidget(self.enroll_btn)
 
         # ---- 步骤进度 ----
         self.steps_label = QLabel("")
@@ -156,6 +186,7 @@ class Panel(QWidget):
         lay.setContentsMargins(14, 12, 14, 12)
         lay.setSpacing(8)
         lay.addLayout(top)
+        lay.addLayout(live_row)
         lay.addWidget(self.steps_label)
         lay.addWidget(self.line)
         lay.addWidget(self.scroll, 1)
@@ -170,6 +201,10 @@ class Panel(QWidget):
         self.retry_btn.clicked.connect(self.retry_requested)
         self._focus_watcher = _FocusWatcher(self.input_focus_changed.emit)
         self.input.installEventFilter(self._focus_watcher)
+        self.live_box.toggled.connect(self.live_toggled)
+        self.filter_box.toggled.connect(self.filter_toggled)
+        self.tap_box.toggled.connect(self.tap_toggled)
+        self.enroll_btn.clicked.connect(self._ask_enroll)
         self.lang_box.currentIndexChanged.connect(self._retranslate)
         self._retranslate()
 
@@ -252,9 +287,36 @@ class Panel(QWidget):
         self.input.setEnabled(not recording)
         self.set_status(t("listening") if recording else "")
 
+    # ---- 实时语音 ----
+    def set_live_state(self, on: bool) -> None:
+        """连上 / 断开后同步开关（不再触发 live_toggled）。"""
+        self.live_box.blockSignals(True)
+        self.live_box.setChecked(on)
+        self.live_box.blockSignals(False)
+        self.mic_btn.setToolTip(t("talk_tip") if on else t("mic_tip"))
+        self.stop_btn.setEnabled(on or self.stop_btn.isEnabled())
+
+    def set_talking(self, on: bool) -> None:
+        """点按收音模式下：正在收音时麦克风按钮变红。"""
+        self.mic_btn.setProperty("recording", "true" if on else "false")
+        self.mic_btn.style().unpolish(self.mic_btn)
+        self.mic_btn.style().polish(self.mic_btn)
+        self.set_status(t("talk_on") if on else "")
+
+    def set_enrolling(self, on: bool) -> None:
+        self.enroll_btn.setEnabled(not on)
+        self.live_box.setEnabled(not on)
+        self.set_status(t("enrolling") if on else "")
+
+    def _ask_enroll(self):
+        name, ok = QInputDialog.getItem(self, t("enroll"), t("enroll_who"), ["Teresa", "Joey"], 0, True)
+        if ok and name.strip():
+            self.enroll_requested.emit(name.strip())
+
     # ---- 任务 ----
     def set_running(self, running: bool) -> None:
-        self.stop_btn.setEnabled(running)
+        # 实时语音模式下 Stop 任何时候都能点（Agent 可能在说话，即使没有任务）
+        self.stop_btn.setEnabled(running or self.live_box.isChecked())
         if not running:
             self.retry_btn.setEnabled(False)
 
@@ -298,6 +360,14 @@ class Panel(QWidget):
         self.stop_btn.setText(t("stop"))
         self.retry_btn.setText(t("retry"))
         self.mic_btn.setToolTip(t("mic_tip"))
+        self.live_box.setText(t("live"))
+        self.filter_box.setText(t("vfilter"))
+        self.tap_box.setText(t("tap_talk"))
+        self.enroll_btn.setText(t("enroll"))
+
+    def mousePressEvent(self, e):
+        activate_app()
+        super().mousePressEvent(e)
 
     def closeEvent(self, e):
         QApplication.quit()
