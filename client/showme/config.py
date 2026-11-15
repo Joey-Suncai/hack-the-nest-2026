@@ -6,6 +6,14 @@ import os
 DEMO_APP = "VS Code"
 DEMO_GOAL = "Clone the GitHub repo https://github.com/octocat/Hello-World"
 
+# ---- 实时语音的麦克风过滤（voice_filter.py）----
+VAD_THRESHOLD = 0.5  # Silero 人声概率超过多少算「有人在说话」
+VOICE_THRESHOLD = 0.5  # 声纹余弦相似度超过多少算「是本人」（实测后调整）
+VOICE_CONFIRM_S = 0.5  # 累计多少秒人声后做一次声纹判断（这段时间先压低 ShowMe 的音量）
+VOICE_END_S = 0.6  # 连续多少秒没人声算这段话结束
+DUCK_VOLUME = 0.3  # 检测到人声时 ShowMe 播放音量压到多少
+PTT_KEY = "space"  # 「按住说话」用的键
+
 # ---- 语音输入 ----
 MIC_RATE = 16000  # /api/transcribe 要 16 kHz 单声道 WAV
 MIC_MAX_S = 30  # 最长录多久，到点自动结束
