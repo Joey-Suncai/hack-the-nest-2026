@@ -11,7 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from app import gemini, steps, voice
+from app import docs_guide, gemini, steps, voice
 
 app = FastAPI(title="Hack The Nest 2026 API")
 
@@ -112,3 +112,26 @@ def speak(body: SpeakIn):
     if mp3 is None:
         return Response(status_code=204)
     return Response(content=mp3, media_type="audio/mpeg")
+
+
+class GuideIn(BaseModel):
+    app: str = ""
+    goal: str
+    lang: Literal["zh", "en"] = "zh"
+
+
+class GuideSource(BaseModel):
+    title: str
+    url: str
+
+
+class GuideOut(BaseModel):
+    outline: list[str]
+    sources: list[GuideSource]
+
+
+@app.post("/api/guide", response_model=GuideOut)
+def guide(body: GuideIn):
+    if not body.goal.strip():
+        return bad_request("goal 不能为空")
+    return docs_guide.make_guide(body.app, body.goal, body.lang)

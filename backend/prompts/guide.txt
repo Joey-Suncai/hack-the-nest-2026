@@ -1,0 +1,8 @@
+You MUST first run a Google Search to find the official documentation (or the most reliable help article) for how to do the following task in the app "{app}" on macOS. Base the steps on what you find, not on memory.
+
+Task: {goal}
+
+Output ONLY the steps a user should follow, one step per line.
+- At most 8 steps, each step short (one action, under 20 words).
+- No title, no introduction, no summary, no extra notes, no markdown.
+- Write the steps in {language}.
