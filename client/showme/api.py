@@ -1,4 +1,4 @@
-"""调后端。接口以 docs/API.md 为准。所有失败都变成 ApiError（带给用户看的中文说明）。"""
+"""调后端。接口以 docs/API.md 为准。所有失败都变成 ApiError（带给用户看的说明，跟界面语言一致）。"""
 
 import httpx
 
@@ -7,9 +7,10 @@ from showme.i18n import get_lang, t
 
 
 class ApiError(Exception):
-    def __init__(self, message: str):
+    def __init__(self, message: str, status: int | None = None):
         super().__init__(message)
         self.message = message
+        self.status = status  # HTTP 状态码；连不上 / 超时为 None
 
 
 _client = httpx.Client(base_url=API_BASE)
@@ -26,10 +27,10 @@ def _request(method: str, path: str, timeout: float, **kw) -> httpx.Response:
         try:
             msg = r.json()["error"]
         except Exception:  # noqa: BLE001
-            raise ApiError(t("err_http", code=r.status_code))
+            raise ApiError(t("err_http", code=r.status_code), r.status_code)
         # 后端的 error 是中文：英文界面下显示通用英文提示，原文打印到终端方便调试
         print(f"[api] {method} {path} → HTTP {r.status_code}: {msg}", flush=True)
-        raise ApiError(msg if get_lang() == "zh" else t("err_generic"))
+        raise ApiError(msg if get_lang() == "zh" else t("err_generic"), r.status_code)
     return r
 
 
@@ -39,6 +40,23 @@ def health() -> dict:
 
 def next_step(payload: dict) -> dict:
     return _request("POST", "/api/next-step", timeout=45, json=payload).json()
+
+
+def chat(payload: dict) -> dict:
+    """对话模式：{lang, message, screenshot, messages, task, frontmost_app} → {reply, action, app, goal, outline, note}"""
+    return _request("POST", "/api/chat", timeout=30, json=payload).json()
+
+
+def transcribe(wav: bytes, lang: str) -> str:
+    """语音转文字。没配语音（503）或后端还没有这个接口（404）→ ApiError(voice_unavailable)。"""
+    try:
+        r = _request("POST", "/api/transcribe", timeout=30,
+                     files={"file": ("speech.wav", wav, "audio/wav")}, data={"lang": lang})
+    except ApiError as e:
+        if e.status in (404, 503):
+            raise ApiError(t("voice_unavailable"), e.status)
+        raise
+    return (r.json().get("text") or "").strip()
 
 
 def speak(text: str, lang: str) -> bytes | None:

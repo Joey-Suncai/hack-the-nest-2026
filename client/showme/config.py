@@ -2,9 +2,13 @@
 
 import os
 
-# ---- Demo 默认值（面板打开时预先填好）----
+# ---- Demo 示例 ----
 DEMO_APP = "VS Code"
 DEMO_GOAL = "Clone the GitHub repo https://github.com/octocat/Hello-World"
+
+# ---- 语音输入 ----
+MIC_RATE = 16000  # /api/transcribe 要 16 kHz 单声道 WAV
+MIC_MAX_S = 30  # 最长录多久，到点自动结束
 
 # ---- 调试记录：SHOWME_LOG=1 时，每一步的截图和后端返回存到 client/logs/<时间>/ ----
 LOG = os.getenv("SHOWME_LOG") == "1"
