@@ -14,8 +14,10 @@ import time
 
 RETURN_KEYCODES = (36, 76)  # Return、小键盘 Enter
 
-_TYPING_WORDS = re.compile(r"\b(type|typing|enter|paste|search|write|input|fill)\b|输入|搜索|粘贴|填写", re.IGNORECASE)
-_TYPING_TARGETS = re.compile(r"search|input|text ?field|text ?box|url|name|搜索|输入", re.IGNORECASE)
+# 打字步骤：要用户输入内容（只认回车，或者用户说 "done"）
+_TYPING_WORDS = re.compile(r"\b(type|typing|paste|write|fill in|enter (the|your|a|an)|press (enter|return))\b|输入|粘贴|填写|回车", re.IGNORECASE)
+# 快捷键步骤：按任意键就算（"Press ⌘S"、"Press Tab"）
+_KEY_WORDS = re.compile(r"\bpress\b|[⌘⌥⌃⇧]|\b(cmd|command|ctrl|control|shift|option|alt)\s*\+|按下?\s*(⌘|cmd|command|ctrl|shift|tab|esc)", re.IGNORECASE)
 
 
 def to_top_left(x: float, y: float, screen_h: float) -> tuple[float, float]:
@@ -32,12 +34,27 @@ def click_in_rect(pt: tuple[float, float], rect: tuple[int, int, int, int] | Non
     return rx - pad <= x <= rx + rw + pad and ry - pad <= y <= ry + rh + pad
 
 
-def is_typing_step(instruction: str | None, expect: str | None = None, target_label: str | None = None) -> bool:
-    """这一步是不是「输入内容」：指令 / expect 里提到 type、enter、search、输入……，或者目标是输入框。"""
-    text = " ".join(s for s in (instruction, expect) if s)
+def step_kind(instruction: str | None, expect: str | None = None) -> str:
+    """这一步靠什么信号算完成：
+    - "type"：输入内容 → 只认回车（或用户说 done）。点击、画面变化都不算
+    - "key"：按快捷键 → 有按键就算
+    - "click"（默认）：点在框里；点在框外附近、而且点完画面明显变了，也算
+    """
+    text = instruction or ""
     if _TYPING_WORDS.search(text):
-        return True
-    return bool(target_label and _TYPING_TARGETS.search(target_label))
+        return "type"
+    if _KEY_WORDS.search(text):
+        return "key"
+    return "click"
+
+
+def is_typing_step(instruction: str | None, expect: str | None = None, target_label: str | None = None) -> bool:
+    return step_kind(instruction, expect) == "type"
+
+
+def near_rect(pt: tuple[float, float], rect: tuple[int, int, int, int] | None, pad: float, near: float) -> bool:
+    """点在框外，但离框不超过 near 个逻辑点（框画得偏一点时的后备）。"""
+    return rect is not None and not click_in_rect(pt, rect, pad) and click_in_rect(pt, rect, pad + near)
 
 
 class TypingTracker:

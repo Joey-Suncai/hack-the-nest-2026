@@ -28,12 +28,12 @@ from PyQt6.QtWidgets import QApplication
 from showme import api, apps, capture, enroll, ocr, sync, wording
 from showme.change import ChangeDetector, _diff, mask_rects
 from showme.config import (CHANGE_THRESHOLD, CLICK_EXTRA_PAD, DEBUG_DETECT, HIGHLIGHT_PAD, LOG, MIC_MAX_S, POLL_S,
-                           SETTLE_MAX_S, SETTLE_MIN_CLICK_S, SETTLE_POLL_S, TALK_MAX_S, TYPE_IDLE_S)
+                           NEAR_CLICK_PT, NEAR_CLICK_WINDOW_S, SETTLE_MAX_S, SETTLE_MIN_S, SETTLE_POLL_S, TALK_MAX_S)
 from showme.coords import box_to_rect, expand, same_target
 from showme.i18n import t
 from showme.agent import AgentSession, MainThread
 from showme.hotkey import RightOptionMonitor
-from showme.inputwatch import InputWatcher, TypingTracker, click_in_rect, is_typing_step
+from showme.inputwatch import InputWatcher, click_in_rect, near_rect, step_kind
 from showme.narrator import Narrator
 from showme.recorder import Recorder
 
@@ -125,10 +125,14 @@ class Controller(QObject):
         self._last_raw = None  # 轮询最近一帧（遮罩后）：画面变化触发时当「稳定」比较的起点
         self._n_filler = 0
         self._last_box: list[int] | None = None  # 上一个框：OCR 有多个候选时选离它近的
-        self._typing_step = False
-        self.typing = TypingTracker(TYPE_IDLE_S)
+        # 每一步只认一个主信号（step_kind）：click = 点在框里；type = 回车；key = 有按键。用户说 done → Agent 带 note 调 tool。
+        # 画面变化只在两种情况下算：没有辅助功能权限（监听不到点击 / 按键）、或者没有框（unsure 之后等用户自己弄好）；
+        # 以及点击步骤的后备：点在框外附近、点完 NEAR_CLICK_WINDOW_S 秒内画面明显变了。
+        self._kind = "click"
+        self._near_click_at: float | None = None
+        self._rebase = False  # 下一帧重取基准帧
         self.inputs = InputWatcher(self._on_click, self._on_key)
-        self.inputs.start()
+        self._inputs_ok = self.inputs.start()
         self.hotkey = RightOptionMonitor(self.toggle_talk)
         if not self.hotkey.start():
             self.panel.add_message("assistant", t("ax_needed"))
@@ -596,12 +600,12 @@ class Controller(QObject):
         self._settle = None
         self._last_raw = None
         self.poll.setInterval(int(POLL_S * 1000))
-        self.typing.reset()
+        self._near_click_at = None
+        self._rebase = False
         cur = self.current or {}
-        self._typing_step = bool(self.last_instruction) and is_typing_step(
-            self.last_instruction, cur.get("expect"), cur.get("target_label"))
+        self._kind = step_kind(self.last_instruction, cur.get("expect")) if self.last_instruction else "none"
         self.poll.start()
-        dbg(f"_wait：打字步骤={self._typing_step}")
+        dbg(f"_wait：这一步靠 {self._kind} 判断完成（画面变化{'只做后备' if self._screen_only_backup() else '也算'}）")
         dbg(f"_wait：开始等画面变化 state={self.state} 基准帧={'用请求截图' if base_img is not None else '下一帧'} "
             f"轮询在跑={self.poll.isActive()} _typing={self._typing} 来源={getattr(self, '_result_source', None)}")
 
@@ -629,18 +633,16 @@ class Controller(QObject):
             return
         if self._step_done:
             return
-        if self._typing_step:
-            how = self.typing.done()
-            if how:
-                self._step_completed("typing", detail=how)
-                return
+        if self._kind == "type" and self._inputs_ok:  # 打字步骤：只认回车（_on_key）或用户说 done，不看画面
+            return
         try:
             raw = capture.to_small_gray(capture.grab())
         except Exception as e:  # noqa: BLE001
             self._on_error(api.ApiError(t("capture_failed", e=e)))
             return
         grew = self._grow_masks()
-        if self._base_raw is None:  # 基准帧在高亮层显示之后取
+        if self._base_raw is None or self._rebase:  # 基准帧在高亮层显示之后取；点在框附近 / 忽略了一次变化后重取
+            self._rebase = False
             self._base_raw = raw
             self.detector.reset(self._masked(raw))
             return
@@ -653,8 +655,19 @@ class Controller(QObject):
             masked = min(1.0, sum(w * h for _, _, w, h in self._masks) / area)
             dbg(f"poll diff={self.detector.last_diff:.4f} 阈值={self.detector.threshold} 已变化={self.detector._changed} "
                 f"稳定帧={self.detector._stable} 遮罩≈{masked * 100:.0f}% 遮罩数={len(self._masks)} _typing={self._typing} 触发={fired}")
-        if fired:
+        if not fired:
+            return
+        if not self._screen_only_backup():
             self._step_completed("screen_change")
+        elif self._near_click_at is not None and time.monotonic() - self._near_click_at <= NEAR_CLICK_WINDOW_S:
+            self._step_completed("click_near")
+        else:  # 加载、悬停、动画、下拉框……不是用户做完了这一步
+            dbg("画面变了，但用户没点框 → 不算完成（重取基准帧）")
+            self._rebase = True
+
+    def _screen_only_backup(self) -> bool:
+        """画面变化是不是只做后备：能监听到点击 / 按键、而且有框时是。"""
+        return self._inputs_ok and self._kind != "none"
 
     def _step_completed(self, reason: str, detail: str | None = None):
         """点击 / 打字 / 画面变化 → 这一步做完了。一步只算一次，直到下一步的框出来。"""
@@ -666,16 +679,15 @@ class Controller(QObject):
         self._t_change = time.perf_counter()
         print(f"[step] 完成（{reason}{'/' + detail if detail else ''}）：{self.last_instruction!r}", flush=True)
         # 不马上截图：菜单还在弹、窗口还在加载时截到旧画面，Gemini 会以为用户没点，又让点同一个（日志里 22 处）
-        self._settle = {"t0": time.monotonic(), "reason": reason, "n": 0,
-                        "min": SETTLE_MIN_CLICK_S if reason == "click" else 0.0,
-                        "prev": self._last_raw if reason == "screen_change" else None}
+        # 不管哪种信号，都从新的一帧开始比、至少等 SETTLE_MIN_S（画面变化触发那一帧不能当「稳定」的起点）
+        self._settle = {"t0": time.monotonic(), "reason": reason, "n": 0, "min": SETTLE_MIN_S, "prev": None}
         self.poll.setInterval(int(SETTLE_POLL_S * 1000))
         if not self.poll.isActive():
             self.poll.start()
 
     def _settle_tick(self):
         """每 SETTLE_POLL_S 秒截一张缩略图：连续 2 张基本不变（diff ≤ CHANGE_THRESHOLD）就截正式的图；
-        点击至少等 SETTLE_MIN_CLICK_S；最多等 SETTLE_MAX_S（视频 / 动画一直在动也不能卡住）。"""
+        至少等 SETTLE_MIN_S；最多等 SETTLE_MAX_S（视频 / 动画一直在动也不能卡住）。"""
         st = self._settle
         el = time.monotonic() - st["t0"]
         try:
@@ -702,15 +714,26 @@ class Controller(QObject):
         if self.state != WAITING or self._step_done or self.overlay._rect is None:
             return
         r = self.overlay._rect
-        if click_in_rect((x, y), (r.x(), r.y(), r.width(), r.height()), CLICK_EXTRA_PAD):
+        rect = (r.x(), r.y(), r.width(), r.height())
+        if self._kind == "type":  # 打字步骤：点输入框是打字的一部分，不算完成
+            return
+        if click_in_rect((x, y), rect, CLICK_EXTRA_PAD):
             self._step_completed("click")
+        elif near_rect((x, y), rect, CLICK_EXTRA_PAD, NEAR_CLICK_PT):
+            dbg(f"点在框外附近 ({x:.0f}, {y:.0f})：{NEAR_CLICK_WINDOW_S}s 内画面明显变了就算完成")
+            self._near_click_at = time.monotonic()
+            self._rebase = True
         else:
             dbg(f"点在框外 ({x:.0f}, {y:.0f})，不算完成")
 
     def _on_key(self, is_return: bool):
-        """全局按键：只记时间和是不是回车，不记内容。"""
-        if self.state == WAITING and self._typing_step and not self._step_done:
-            self.typing.key(is_return)
+        """全局按键：只看是不是回车，不记内容。打字步骤只认回车；快捷键步骤有按键就算。"""
+        if self.state != WAITING or self._step_done:
+            return
+        if self._kind == "type" and is_return:
+            self._step_completed("enter")
+        elif self._kind == "key":
+            self._step_completed("key")
 
     def _on_screen_changed(self):
         dbg(f"_on_screen_changed ✅ 触发：state={self.state} last_instruction={self.last_instruction!r} next_guess={self._guess!r}")
@@ -878,11 +901,15 @@ class Controller(QObject):
 
     def tool_show_next_step(self, params: dict) -> str:
         epoch, t0p = self._stop_epoch, time.perf_counter()
-        self.main.call(self._filler)
         goal = (params.get("goal") or "").strip()
         note = (params.get("note") or "").strip() or None
-        if self._sync_step is not None and self.overlay._rect is not None and not self._user_turn_since_step:
-            sync.log(f"step {self._sync_step} agent called show_next_step by itself (step still shown, user silent; note={note!r})")
+        current = self.main.call(lambda: self.last_instruction if (
+            self.task is not None and self.state == WAITING and self.overlay._rect is not None
+            and not self._user_turn_since_step and not note) else None)
+        if current:  # 框还在、用户没开口：Agent 不能自己换步骤，原样告诉它当前这一步（不截图、不出新框）
+            sync.log(f"step {self._sync_step} agent called show_next_step by itself → kept the current step")
+            return f"SHOWN: {current}"
+        self.main.call(self._filler)
         t0 = time.time()
         try:
             img, payload = self.main.call(lambda: self._tool_prepare(goal, note))

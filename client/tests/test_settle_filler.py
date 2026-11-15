@@ -49,13 +49,13 @@ def _run(c, max_ticks=40):
 
 
 def test_screen_change_waits_until_two_frames_match(monkeypatch, capsys):
-    c = _settler(monkeypatch, [0.2, 0.5, 0.5, 0.5])  # 还在动 → 动 → 不动了
-    c._last_raw = np.full((64, 64), 0.0, np.float32)
+    c = _settler(monkeypatch, [0.2, 0.5] + [0.5] * 60)  # 还在动 → 不动了
     c._step_completed("screen_change")
     assert c.fired == [] and c.poll.interval == 100  # 没马上截图，轮询改成 0.1 s
     _run(c)
     assert len(c.fired) == 1 and c.poll.interval == 150
-    assert "稳定了" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "稳定了" in out and "1 帧" not in out  # 不拿触发那一帧当起点：至少比过两张新截的
 
 
 def test_click_waits_at_least_min_even_if_stable(monkeypatch):
@@ -63,7 +63,7 @@ def test_click_waits_at_least_min_even_if_stable(monkeypatch):
     t0 = time.monotonic()
     c._step_completed("click")
     _run(c)
-    assert c.fired and c.fired[0] - t0 >= ctl.SETTLE_MIN_CLICK_S
+    assert c.fired and c.fired[0] - t0 >= ctl.SETTLE_MIN_S
 
 
 def test_never_stable_gives_up_at_max(monkeypatch, capsys):
@@ -151,3 +151,82 @@ def test_ocr_box_then_gemini_done_stops_and_clears(monkeypatch):
     c._on_result({"status": "done", "instruction": "You created the file!"})
     assert log.index("stop") < log.index("clear") < next(i for i, x in enumerate(log) if isinstance(x, tuple) and x[0] == "speak")
     assert log[-1] == "end" and c.last_instruction is None and c._speak_after_reply is False
+
+
+# ---------------- 每一步只认一个信号 ----------------
+class _Rect:
+    def x(self): return 100
+    def y(self): return 200
+    def width(self): return 50
+    def height(self): return 30
+
+
+def _signals(monkeypatch, kind, inputs_ok=True, fired=True):
+    monkeypatch.setattr(capture, "grab", lambda: None)
+    monkeypatch.setattr(capture, "to_small_gray", lambda img: np.zeros((64, 64), np.float32))
+    done = []
+    c = types.SimpleNamespace(state=ctl.WAITING, _step_done=False, _settle=None, _kind=kind, _inputs_ok=inputs_ok,
+                              _near_click_at=None, _rebase=False, _base_raw=np.zeros((64, 64), np.float32),
+                              overlay=types.SimpleNamespace(_rect=_Rect()), _grow_masks=lambda: False,
+                              _masked=lambda raw: raw, _last_raw=None,
+                              detector=types.SimpleNamespace(feed=lambda f: fired, reset=lambda f: None))
+    c._step_completed = lambda reason, detail=None: done.append(reason)
+    for name in ("_on_click", "_on_key", "_on_poll", "_screen_only_backup"):
+        setattr(c, name, types.MethodType(getattr(Controller, name), c))
+    return c, done
+
+
+def test_typing_step_only_enter(monkeypatch):
+    c, done = _signals(monkeypatch, "type")
+    c._on_click(120, 210)  # 点输入框：打字的一部分
+    c._on_key(False)  # 打字
+    c._on_poll()  # 画面在变（下拉框、打的字）
+    assert done == []
+    c._on_key(True)
+    assert done == ["enter"]
+
+
+def test_key_step_any_key(monkeypatch):
+    c, done = _signals(monkeypatch, "key", fired=False)
+    c._on_key(False)
+    assert done == ["key"]
+
+
+def test_click_step_ignores_screen_change_unless_near_click(monkeypatch):
+    c, done = _signals(monkeypatch, "click")
+    c._on_poll()  # 加载 / 悬停：画面变了但没点
+    assert done == [] and c._rebase
+    c._on_click(400, 600)  # 点得很远
+    c._on_poll()
+    assert done == []
+    c._on_click(75, 205)  # 框外 25 点（放宽 8 点之外）：附近
+    assert c._near_click_at is not None
+    c._on_poll()  # 点之后先重取基准帧
+    assert done == []
+    c._on_poll()  # 之后画面明显变了
+    assert done == ["click_near"]
+
+
+def test_click_in_box_completes(monkeypatch):
+    c, done = _signals(monkeypatch, "click", fired=False)
+    c._on_click(120, 210)
+    assert done == ["click"]
+
+
+def test_screen_change_counts_without_accessibility_or_without_box(monkeypatch):
+    c, done = _signals(monkeypatch, "click", inputs_ok=False)
+    c._on_poll()
+    assert done == ["screen_change"]
+    c, done = _signals(monkeypatch, "none")  # unsure 之后没有框：画面变了就再看一次
+    c._on_poll()
+    assert done == ["screen_change"]
+
+
+def test_agent_cannot_replace_shown_step_by_itself():
+    calls = []
+    c = types.SimpleNamespace(_stop_epoch=0, task={"goal": "x"}, state=ctl.WAITING, last_instruction="Click Clone",
+                              overlay=types.SimpleNamespace(_rect=_Rect()), _user_turn_since_step=False, _sync_step=2,
+                              main=types.SimpleNamespace(call=lambda f: f()), _filler=lambda: calls.append("filler"))
+    c._tool_prepare = lambda goal, note: calls.append("screenshot")
+    out = Controller.tool_show_next_step(c, {"goal": "clone"})
+    assert out == "SHOWN: Click Clone" and calls == []  # 不念 filler、不截图

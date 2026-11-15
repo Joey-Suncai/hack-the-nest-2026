@@ -1,4 +1,4 @@
-from showme.inputwatch import TypingTracker, click_in_rect, is_typing_step, to_top_left
+from showme.inputwatch import TypingTracker, click_in_rect, is_typing_step, to_top_left  # noqa: F401
 
 
 def test_bottom_left_to_top_left():
@@ -20,14 +20,26 @@ def test_click_outside():
     assert not click_in_rect((120, 210), None, 20)
 
 
-def test_typing_step_detection():
-    assert is_typing_step("Type the song name and press Enter.")
-    assert is_typing_step("Click the search box at the top.")
-    assert is_typing_step("Paste the repository URL into the box at the top.")
-    assert is_typing_step("在搜索框里输入歌名")
-    assert is_typing_step("Click the box.", target_label="Search")
-    assert not is_typing_step("Click Clone Git Repository under Start.")
+def test_step_kind():
+    from showme.inputwatch import step_kind
+    assert step_kind("Type the song name and press Enter.") == "type"
+    assert step_kind("Paste the repository URL into the box at the top.") == "type"
+    assert step_kind("Enter your daughter's email address.") == "type"
+    assert step_kind("Press Return to run the command.") == "type"
+    assert step_kind("在搜索框里输入歌名") == "type"
+    assert step_kind("Click the search box at the top.") == "click"  # 只是点一下：点击就算
+    assert step_kind("Click Clone Git Repository under Start.") == "click"
+    assert step_kind("Press ⌘S to save.") == "key"
+    assert step_kind("Press Cmd+Shift+P to open the command palette.") == "key"
     assert not is_typing_step("Click the blue Save button.", expect="The meeting is saved.")
+
+
+def test_near_rect_is_outside_but_close():
+    from showme.inputwatch import near_rect
+    rect = (100, 200, 50, 30)
+    assert near_rect((95, 205), rect, 0, 40)  # 框外 5 点
+    assert not near_rect((120, 210), rect, 0, 40)  # 框里：不是「附近」
+    assert not near_rect((400, 210), rect, 0, 40)  # 太远
 
 
 def test_typing_tracker_enter_and_idle():
