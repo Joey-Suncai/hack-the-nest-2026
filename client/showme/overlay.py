@@ -122,15 +122,29 @@ class Overlay(QWidget):
 
     @contextmanager
     def hidden(self):
-        """截图前先隐藏高亮层，截完再显示。"""
-        self.hide()
+        """截图前先把高亮层清空，截完再画回来。
+
+        不用 hide()：macOS 隐藏窗口有淡出动画，截图里会留下上一步光圈 / 气泡的残影（联调时发现的）。
+        清空内容 + 立即重绘没有动画。
+        """
+        saved = (self._rect, self._text, self._bubble, self._caption, self._caption_rect)
+        self._rect = self._bubble = self._caption_rect = None
+        self._text = self._caption = ""
+        self._anim.stop()
+        self.repaint()
         QApplication.processEvents()
         time.sleep(C.HIDE_WAIT_S)
         try:
             yield
         finally:
-            self.show()
-            apply_macos_window_settings(self, click_through=True)
+            # 截图期间如果有人调了 show_target / clear，就以新的为准
+            if self._rect is None and self._bubble is None and not self._text:
+                self._rect, self._text, self._bubble = saved[:3]
+            if self._caption_rect is None and not self._caption:
+                self._caption, self._caption_rect = saved[3], saved[4]
+            if self._rect is not None and C.BREATHE_MS > 0:
+                self._anim.start(33)
+            self.update()
 
     # ---- 绘制 ----
     def _tick(self):
