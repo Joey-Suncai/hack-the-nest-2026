@@ -80,7 +80,8 @@ def upsert_tools(client: httpx.Client) -> list[str]:
 
 def agent_body(tool_ids: list[str]) -> dict:
     prompt = (ROOT / "backend" / "prompts" / "agent.txt").read_text(encoding="utf-8")
-    tts = {"model_id": os.getenv("AGENT_TTS_MODEL", "eleven_flash_v2_5")}
+    # 英文 Agent 只能用 turbo / flash v2（v2_5 会被拒）
+    tts = {"model_id": os.getenv("AGENT_TTS_MODEL", "eleven_flash_v2")}
     if os.getenv("ELEVENLABS_VOICE_ID", "").strip():
         tts["voice_id"] = os.getenv("ELEVENLABS_VOICE_ID").strip()
     return {
