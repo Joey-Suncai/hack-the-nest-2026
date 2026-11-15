@@ -39,3 +39,13 @@ def test_typing_tracker_enter_and_idle():
     t.reset()
     t.key(True, now=20.0)
     assert t.done(now=20.0) == "enter"
+
+
+def test_look_at_screen_offers_step_by_step_only_for_how_to():
+    from showme.controller import with_offer
+
+    out = with_offer("Use File > Save As.", "How can I change an R Markdown file to an R file?")
+    assert out.startswith("Use File > Save As.") and "step by step" in out and "show_next_step" in out
+    assert "How can I change an R Markdown file" in out  # goal 给 Agent
+    assert with_offer("Clone copies a repo to your computer.", "What does clone mean?") == "Clone copies a repo to your computer."
+    assert "step by step" in with_offer("…", "Where do I turn on dark mode?")

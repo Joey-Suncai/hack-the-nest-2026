@@ -17,6 +17,7 @@ WAITING: 每 POLL_S 秒截图（不隐藏高亮层，遮掉框和面板）→ �
 """
 
 import json
+import re
 import time
 import traceback
 from pathlib import Path
@@ -868,7 +869,7 @@ class Controller(QObject):
         self._tool_time("look_at_screen", t0p)
         if epoch != self._stop_epoch:
             return "STOPPED: the user pressed Stop"
-        return r.get("reply") or "I'm not sure."
+        return with_offer(r.get("reply") or "I'm not sure.", q)
 
     def _tool_chat_prepare(self, q: str):
         front = apps.frontmost_app()
@@ -1016,6 +1017,20 @@ class Controller(QObject):
                 self.panel.live_box.setChecked(True)  # 重新连接，会加载新声纹
 
         self._bg_free(work, ok, fail)
+
+
+_HOW_TO = re.compile(r"\b(how (do|can|should|would) (i|we|you)|how to|can (i|you)|could you|where (do|can|is)|is there a way|"
+                     r"change|convert|create|make|add|remove|delete|open|save|export|install|set ?up|turn (on|off)|switch)\b",
+                     re.IGNORECASE)
+
+
+def with_offer(reply: str, question: str) -> str:
+    """look_at_screen 只回答、不画框。如果用户问的是「怎么做成某件事」，在返回给 Agent 的内容后面加一句提示：
+    回答完反问用户要不要一步步带他做；用户说好，就用这个目标调用 show_next_step。（纯解释性的问题不加。）"""
+    if not _HOW_TO.search(question or ""):
+        return reply
+    return (f"{reply}\n\n[ShowMe note for the assistant] After you answer, ask the user in one short sentence: "
+            f"\"Want me to show you step by step?\" If they say yes, call show_next_step with this as the goal: {question}")
 
 
 def _play_sound(name: str) -> float:
