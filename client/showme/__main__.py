@@ -10,7 +10,7 @@ from showme import api
 from showme.config import API_BASE
 from showme.i18n import t
 from showme.controller import Controller
-from showme.overlay import Overlay
+from showme.overlay import Overlay, apply_macos_window_settings, make_accessory_app, watch_space_changes
 from showme.panel import Panel
 
 
@@ -34,8 +34,18 @@ def check_health(panel: Panel, controller=None, tries_left: int = 5):
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("ShowMe")
+    make_accessory_app()  # 必须在建窗口之前：框和面板才能出现在别的桌面 / 全屏 App 上
     overlay = Overlay()
     panel = Panel()
+
+    def on_space_changed():
+        print("[overlay] 切换了桌面，重新设置框和面板", flush=True)
+        apply_macos_window_settings(overlay, click_through=True)
+        apply_macos_window_settings(panel)
+        overlay.raise_()
+        panel.raise_()
+
+    watch_space_changes(on_space_changed)
     controller = Controller(panel, overlay)
     app.aboutToQuit.connect(controller.shutdown)
     QTimer.singleShot(300, lambda: check_health(panel, controller))

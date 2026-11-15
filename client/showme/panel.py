@@ -26,7 +26,7 @@ from PyQt6.QtWidgets import (
 
 from showme import i18n
 from showme.i18n import t
-from showme.overlay import apply_macos_window_settings
+from showme.overlay import activate_app, apply_macos_window_settings
 
 ACCENT = "#FF2D78"
 PANEL_W, PANEL_H = 360, 600
@@ -71,6 +71,8 @@ class _FocusWatcher(QObject):
         self.on_change = on_change
 
     def eventFilter(self, obj, ev):
+        if ev.type() == QEvent.Type.MouseButtonPress:
+            activate_app()  # 辅助 App 不抢焦点：点输入框时主动激活，才能打字
         if ev.type() == QEvent.Type.FocusIn:
             self.on_change(True)
         elif ev.type() == QEvent.Type.FocusOut:
@@ -360,6 +362,10 @@ class Panel(QWidget):
         self.filter_box.setText(t("vfilter"))
         self.tap_box.setText(t("tap_talk"))
         self.enroll_btn.setText(t("enroll"))
+
+    def mousePressEvent(self, e):
+        activate_app()
+        super().mousePressEvent(e)
 
     def closeEvent(self, e):
         QApplication.quit()

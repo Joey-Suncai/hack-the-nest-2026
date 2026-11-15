@@ -44,6 +44,63 @@ def apply_macos_window_settings(widget: QWidget, level: int | None = None, click
         print(f"[overlay] macOS 窗口设置失败：{e}")
 
 
+def make_accessory_app() -> bool:
+    """不显示 Dock 图标的「辅助 App」：macOS 才会把我们的窗口显示在别的桌面 / 全屏 App 上
+    （普通 App 的窗口不会跟过去，CanJoinAllSpaces 不起作用）。要在建任何窗口之前调用。"""
+    if QApplication.platformName() != "cocoa":
+        return False
+    try:
+        from AppKit import NSApplication, NSApplicationActivationPolicyAccessory
+
+        NSApplication.sharedApplication().setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+        return True
+    except Exception as e:  # noqa: BLE001
+        print(f"[overlay] 设置辅助 App 失败：{e}", flush=True)
+        return False
+
+
+def activate_app() -> None:
+    """辅助 App 默认不会抢焦点：用户点面板要打字时，主动激活。"""
+    if QApplication.platformName() != "cocoa":
+        return
+    try:
+        from AppKit import NSApplication
+
+        NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+    except Exception as e:  # noqa: BLE001
+        print(f"[overlay] 激活失败：{e}", flush=True)
+
+
+_space_observer = None  # 要一直持有引用，否则会被回收
+
+
+def watch_space_changes(callback) -> bool:
+    """切换桌面（Space）/ 进出全屏时回调，用来重新设置窗口。"""
+    global _space_observer
+    if QApplication.platformName() != "cocoa":
+        return False
+    try:
+        import objc
+        from AppKit import NSWorkspace, NSWorkspaceActiveSpaceDidChangeNotification
+        from Foundation import NSObject
+
+        class _SpaceObserver(NSObject):
+            def spaceChanged_(self, note):
+                try:
+                    callback()
+                except Exception as e:  # noqa: BLE001
+                    print(f"[overlay] 切换桌面回调出错：{e}", flush=True)
+
+        _space_observer = _SpaceObserver.alloc().init()
+        NSWorkspace.sharedWorkspace().notificationCenter().addObserver_selector_name_object_(
+            _space_observer, objc.selector(_SpaceObserver.spaceChanged_, signature=b"v@:@"),
+            NSWorkspaceActiveSpaceDidChangeNotification, None)
+        return True
+    except Exception as e:  # noqa: BLE001
+        print(f"[overlay] 监听切换桌面失败：{e}", flush=True)
+        return False
+
+
 class Overlay(QWidget):
     def __init__(self):
         super().__init__()
