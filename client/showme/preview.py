@@ -22,7 +22,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("rect", nargs="*", type=int, help="x y w h")
     ap.add_argument("--seconds", type=int, default=15)
-    ap.add_argument("--text", default="点击上方工具栏的「图表」按钮")
+    ap.add_argument("--text", default="Click “Clone Repository” in the Source Control view")
     args = ap.parse_args()
 
     app = QApplication(sys.argv)
