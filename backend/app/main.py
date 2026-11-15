@@ -111,6 +111,20 @@ def chat_endpoint(body: chat.ChatIn):
     return chat.finalize_chat(out, has_task=body.task is not None, lang=body.lang)
 
 
+@app.post("/api/transcribe")
+async def transcribe(file: UploadFile = File(...), lang: str = Form("zh")):
+    data = await file.read()
+    if not data:
+        return bad_request("音频文件是空的")
+    if len(data) > voice.MAX_AUDIO_BYTES:
+        return bad_request("音频太大了（上限 5MB，约 30 秒）")
+    try:
+        text = voice.transcribe(data, file.filename or "audio.wav", lang)
+    except voice.NotConfigured:
+        return JSONResponse({"error": "语音输入没有配置，请直接打字"}, status_code=503)
+    return {"text": text}
+
+
 class SpeakIn(BaseModel):
     text: str
     lang: Literal["zh", "en"] = "zh"
