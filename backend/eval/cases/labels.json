@@ -571,5 +571,35 @@
         26
       ]
     ]
+  },
+  {
+    "file": "zoom_loading.jpg",
+    "group": "flow",
+    "app": "Zoom",
+    "goal": "schedule a meeting with another person",
+    "lang": "en",
+    "history_items": [
+      {
+        "instruction": "Click the blue Schedule icon with a calendar in the main toolbar.",
+        "ok": null
+      }
+    ],
+    "history": [],
+    "expect_status": "unsure"
+  },
+  {
+    "file": "ppt_new_done.jpg",
+    "group": "flow",
+    "app": "Microsoft PowerPoint",
+    "goal": "create a new presentation in PowerPoint",
+    "lang": "en",
+    "history_items": [
+      {
+        "instruction": "Click Blank Presentation at the top left to create a new presentation.",
+        "ok": null
+      }
+    ],
+    "history": [],
+    "expect_status": "done"
   }
 ]
