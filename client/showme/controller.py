@@ -25,10 +25,10 @@ from pathlib import Path
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
-from showme import api, apps, capture, enroll, ocr, sync, wording
+from showme import api, apps, ax_snap, capture, enroll, ocr, sync, wording
 from showme.change import ChangeDetector, _diff, mask_rects
 from showme.config import (CHANGE_THRESHOLD, CLICK_EXTRA_PAD, DEBUG_DETECT, HIGHLIGHT_PAD, LOG, MIC_MAX_S, POLL_S,
-                           NEAR_CLICK_PT, SETTLE_MAX_S, SETTLE_MIN_S, SETTLE_POLL_S, TALK_MAX_S)
+                           NEAR_CLICK_PT, SETTLE_MAX_S, SETTLE_MIN_S, SETTLE_NOCHANGE_MAX_S, SETTLE_POLL_S, TALK_MAX_S)
 from showme.coords import box_to_rect, expand, same_target
 from showme.i18n import t
 from showme.agent import AgentSession, MainThread
@@ -444,6 +444,7 @@ class Controller(QObject):
 
         def call():
             r = api.next_step({**payload, "screenshot": capture.to_jpeg_b64(img)})
+            r = ax_snap.snap_result(r, self._screen_wh)  # Dock 图标：换成 Accessibility 的精确框
             self._log_turn("next", img, payload, r, t0)
             return r
 
@@ -464,6 +465,9 @@ class Controller(QObject):
             rec = {"kind": kind, "seconds": round(time.time() - t0, 2), "request": payload, "response": r}
             if kind == "next" and r.get("box"):
                 rec["rect_logical_xywh"] = expand(box_to_rect(r["box"], *self._screen_wh), HIGHLIGHT_PAD)
+                if r.get("snap"):
+                    rec["snap"] = r["snap"]
+                    rec["snap_rect_xywh"] = box_to_rect(r["box"], *self._screen_wh)
             (self._log_dir / f"{k}.json").write_text(json.dumps(rec, ensure_ascii=False, indent=2))
             brief = r.get("error") or (f"{r.get('action')} | {r.get('reply')}" if kind == "chat"
                                        else f"{r.get('status')} box={r.get('box')} | {r.get('instruction')}")
@@ -678,14 +682,17 @@ class Controller(QObject):
         # 不管哪种信号，都从新的一帧开始比、至少等 SETTLE_MIN_S（画面变化触发那一帧不能当「稳定」的起点）
         # 先等画面「变了」（和做之前那一帧比），再等它稳定：网页点完要过一会儿才开始变，太早截到的还是旧画面
         self._settle = {"t0": time.monotonic(), "reason": reason, "n": 0, "min": SETTLE_MIN_S, "prev": None,
-                        "base": self._last_raw, "changed": self._last_raw is None or reason == "screen_change"}  # 画面变化触发：已经变了
+                        "base": self._last_raw, "changed": self._last_raw is None or reason == "screen_change",  # 画面变化触发：已经变了
+                        "t_changed": 0.0}
         self.poll.setInterval(int(SETTLE_POLL_S * 1000))
         if not self.poll.isActive():
             self.poll.start()
 
     def _settle_tick(self):
         """每 SETTLE_POLL_S 秒截一张缩略图：连续 2 张基本不变（diff ≤ CHANGE_THRESHOLD）就截正式的图；
-        至少等 SETTLE_MIN_S；最多等 SETTLE_MAX_S（视频 / 动画一直在动也不能卡住）。"""
+        至少等 SETTLE_MIN_S。画面还没变：最多等 SETTLE_NOCHANGE_MAX_S（慢窗口，比如 Zoom 的「安排会议」）；
+        开始变之后：最多再等 SETTLE_MAX_S（视频 / 动画一直在动也不能卡住）。
+        等的时候用户说话 / 按停止 → state 不是 WAITING 或 _wait() 清掉 _settle，这里就不会再被调用。"""
         st = self._settle
         el = time.monotonic() - st["t0"]
         try:
@@ -699,7 +706,8 @@ class Controller(QObject):
         if raw is not None and not st["changed"] and _diff(raw, st["base"]) > CHANGE_THRESHOLD:
             st["changed"] = True
             st["t_changed"] = el
-        if el >= SETTLE_MAX_S or raw is None:
+        cap = st["t_changed"] + SETTLE_MAX_S if st["changed"] else SETTLE_NOCHANGE_MAX_S
+        if el >= cap or raw is None:
             how = ("截图失败" if raw is None else "画面一直没变，到时间了" if not st["changed"] else "一直在动，到时间了")
         elif st["changed"] and d is not None and d <= CHANGE_THRESHOLD and el >= st["min"]:
             how = "稳定了" if st["base"] is None else f"{st.get('t_changed', 0) * 1000:.0f} ms 时开始变，之后稳定了"
@@ -799,8 +807,14 @@ class Controller(QObject):
             self.panel.add_step(len(self.history) + 1, instr)
             self._update_steps()
 
-        near = self._last_box
-        self._bg_free(lambda: ocr.locate(img, label, near=near), found, lambda e: print(f"[ocr] {_msg(e)}", flush=True))
+        near, wh = self._last_box, self._screen_wh
+
+        def locate():  # 顺序：AX Dock 匹配 → OCR
+            t = time.perf_counter()
+            box = ax_snap.dock_box(label, guess.get("instruction"), guess.get("box"), wh)
+            return (box, (time.perf_counter() - t) * 1000) if box else ocr.locate(img, label, near=near)
+
+        self._bg_free(locate, found, lambda e: print(f"[ocr] {_msg(e)}", flush=True))
 
     def _fetch_guide(self):
         """后端用官方文档生成步骤大纲。没有这个接口 / 失败都没关系。"""
@@ -931,6 +945,7 @@ class Controller(QObject):
         epoch, t0p = self._stop_epoch, time.perf_counter()
         goal = (params.get("goal") or "").strip()
         note = (params.get("note") or "").strip() or None
+        app = (params.get("app") or "").strip() or None  # Agent 说的软件（"Google Chrome"）；没有就让后端从目标推断
         current = self.main.call(lambda: self.last_instruction if (
             self.task is not None and self.state == WAITING and self.overlay._rect is not None
             and not self._user_turn_since_step and not note) else None)
@@ -940,7 +955,7 @@ class Controller(QObject):
         self.main.call(self._filler)
         t0 = time.time()
         try:
-            img, payload = self.main.call(lambda: self._tool_prepare(goal, note))
+            img, payload = self.main.call(lambda: self._tool_prepare(goal, note, app))
         except Exception as e:  # noqa: BLE001
             msg = str(e)
             return msg if msg.startswith("STOPPED:") else f"ERROR: could not take a screenshot ({e})"
@@ -952,6 +967,7 @@ class Controller(QObject):
             return f"ERROR: {_english(e)}"
         except Exception as e:  # noqa: BLE001
             return f"ERROR: {e}"
+        r = ax_snap.snap_result(r, self._screen_wh)  # Dock 图标：换成 Accessibility 的精确框
         self._log_turn("next", img, payload, r, t0)
         self._tool_time("show_next_step", t0p)
         if epoch != self._stop_epoch:  # 等 Gemini 时用户按了 Stop：不画框、不念
@@ -968,7 +984,7 @@ class Controller(QObject):
         if self._turn is not None:
             self._turn.setdefault("tools", []).append((name, ms))
 
-    def _tool_prepare(self, goal: str, note: str | None):
+    def _tool_prepare(self, goal: str, note: str | None, app: str | None = None):
         """主线程：决定是不是新任务，截图，组 next-step 请求。"""
         if self.agent is None:
             raise RuntimeError("STOPPED: the user pressed Stop")
@@ -976,9 +992,12 @@ class Controller(QObject):
         self.poll.stop()
         self._provisional = None
         if self.task is None or (not note and goal and _different_goal(goal, self.task["goal"])):
-            self._start_task(apps.frontmost_app() or t("current_app"), goal or t("current_app"), None, request=False)
+            # 不再用「最前面的 App」当任务的软件：用户在 ShowMe / 终端 / 别的窗口里开口时会选错（日志：app='Claude'）
+            self._start_task(app or t("current_app"), goal or t("current_app"), None, request=False)
         elif goal:
             self.task["goal"] = goal
+        if app and self.task is not None:
+            self.task["app"] = app
         if note and self.last_instruction:  # 「做完了 / 点错了」：当前这步记进 history，带上 note 重新看
             self.history.append({"instruction": self.last_instruction, "ok": None})
         self.state = REQUESTING

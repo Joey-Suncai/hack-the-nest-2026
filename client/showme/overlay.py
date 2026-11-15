@@ -44,6 +44,21 @@ def apply_macos_window_settings(widget: QWidget, level: int | None = None, click
         print(f"[overlay] macOS 窗口设置失败：{e}")
 
 
+def order_front_without_activating(widget: QWidget) -> None:
+    """把窗口提到同层最前，但不激活 ShowMe、不让窗口变成 key window。
+
+    不能用 QWidget.raise_()：Qt 在 macOS 上 raise 会顺带 activateIgnoringOtherApps（QT_MAC_SET_RAISE_PROCESS），
+    用户正在用的 App 就失去焦点 —— Zoom「安排会议」这类窗口一失焦就自己关掉。"""
+    if QApplication.platformName() != "cocoa" or not widget.isVisible():
+        return
+    try:
+        import objc
+
+        objc.objc_object(c_void_p=int(widget.winId())).window().orderFrontRegardless()
+    except Exception as e:  # noqa: BLE001
+        print(f"[overlay] 置前失败：{e}", flush=True)
+
+
 def make_accessory_app() -> bool:
     """不显示 Dock 图标的「辅助 App」：macOS 才会把我们的窗口显示在别的桌面 / 全屏 App 上
     （普通 App 的窗口不会跟过去，CanJoinAllSpaces 不起作用）。要在建任何窗口之前调用。"""
@@ -101,6 +116,19 @@ def watch_space_changes(callback) -> bool:
         return False
 
 
+def _flush_core_animation() -> None:
+    """repaint() 画进的内容要等 Core Animation 事务提交才送到 WindowServer；主线程接着 sleep + 截图时
+    事件循环没转，可能截到旧内容。手动提交一次。"""
+    if QApplication.platformName() != "cocoa":
+        return
+    try:
+        from Quartz import CATransaction
+
+        CATransaction.flush()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 class Overlay(QWidget):
     def __init__(self):
         super().__init__()
@@ -137,6 +165,20 @@ class Overlay(QWidget):
 
         self.show()
         apply_macos_window_settings(self, click_through=True)
+        self._exclude_from_capture()
+
+    def _exclude_from_capture(self) -> None:
+        """截图时让 WindowServer 直接不合成这个窗口（见 capture.EXCLUDE_WINDOW_IDS）。"""
+        if QApplication.platformName() != "cocoa":
+            return
+        try:
+            import objc
+
+            from showme import capture
+
+            capture.exclude_window(objc.objc_object(c_void_p=int(self.winId())).window().windowNumber())
+        except Exception as e:  # noqa: BLE001
+            print(f"[overlay] 截图排除高亮层失败（只靠清空重绘）：{e}", flush=True)
 
     # ---- 对外接口 ----
     def show_target(self, rect: tuple[int, int, int, int], text: str) -> None:
@@ -220,6 +262,7 @@ class Overlay(QWidget):
         self._text = self._caption = self._badge = ""
         self._anim.stop()
         self.repaint()
+        _flush_core_animation()  # 后备（排除窗口失败时）：立刻提交重绘，别等事件循环
         QApplication.processEvents()
         time.sleep(C.HIDE_WAIT_S)
         try:
